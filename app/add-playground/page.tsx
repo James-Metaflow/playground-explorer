@@ -1,4 +1,4 @@
-i"use client"
+"use client"
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { MapPin, Camera, Plus, X } from 'lucide-react'
+import { MapPin, Camera, Plus, X } from "lucide-react"
 import Link from "next/link"
 
 export default function AddPlaygroundPage() {
@@ -17,31 +17,43 @@ export default function AddPlaygroundPage() {
   const [newCategory, setNewCategory] = useState("")
 
   const availableFeatures = [
-    "Swings", "Slides", "Climbing Frame", "Sand Pit", "See-saw", "Monkey Bars",
-    "Zip Line", "Climbing Wall", "Roundabout", "Spring Riders", "Basketball Hoop",
-    "Football Goals", "Picnic Tables", "Benches", "Shade/Shelter", "Fenced Area",
-    "Accessible Equipment", "Water Play", "Sensory Play", "Musical Equipment"
+    "Swings",
+    "Slides",
+    "Climbing Frame",
+    "Sand Pit",
+    "See-saw",
+    "Monkey Bars",
+    "Zip Line",
+    "Climbing Wall",
+    "Roundabout",
+    "Spring Riders",
+    "Basketball Hoop",
+    "Football Goals",
+    "Picnic Tables",
+    "Benches",
+    "Shade/Shelter",
+    "Fenced Area",
+    "Accessible Equipment",
+    "Water Play",
+    "Sensory Play",
+    "Musical Equipment",
   ]
 
   const defaultCategories = ["Safety", "Cleanliness", "Equipment Quality", "Fun Factor"]
 
   const toggleFeature = (feature: string) => {
-    setSelectedFeatures(prev =>
-      prev.includes(feature)
-        ? prev.filter(f => f !== feature)
-        : [...prev, feature]
-    )
+    setSelectedFeatures((prev) => (prev.includes(feature) ? prev.filter((f) => f !== feature) : [...prev, feature]))
   }
 
   const addCustomCategory = () => {
     if (newCategory.trim() && !customRatingCategories.includes(newCategory.trim())) {
-      setCustomRatingCategories(prev => [...prev, newCategory.trim()])
+      setCustomRatingCategories((prev) => [...prev, newCategory.trim()])
       setNewCategory("")
     }
   }
 
   const removeCustomCategory = (category: string) => {
-    setCustomRatingCategories(prev => prev.filter(c => c !== category))
+    setCustomRatingCategories((prev) => prev.filter((c) => c !== category))
   }
 
   return (
@@ -149,9 +161,7 @@ export default function AddPlaygroundPage() {
 
               {/* Features Selection */}
               <div>
-                <Label className="text-sm font-medium text-gray-700 mb-3 block">
-                  Playground Features
-                </Label>
+                <Label className="text-sm font-medium text-gray-700 mb-3 block">Playground Features</Label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {availableFeatures.map((feature) => (
                     <Badge
@@ -172,20 +182,16 @@ export default function AddPlaygroundPage() {
 
               {/* Custom Rating Categories */}
               <div>
-                <Label className="text-sm font-medium text-gray-700 mb-3 block">
-                  Custom Rating Categories
-                </Label>
-                <p className="text-sm text-gray-600 mb-3">
-                  Default categories: {defaultCategories.join(", ")}
-                </p>
-                
+                <Label className="text-sm font-medium text-gray-700 mb-3 block">Custom Rating Categories</Label>
+                <p className="text-sm text-gray-600 mb-3">Default categories: {defaultCategories.join(", ")}</p>
+
                 <div className="flex gap-2 mb-3">
                   <Input
                     placeholder="Add custom category (e.g., Accessibility, Parking)"
                     value={newCategory}
                     onChange={(e) => setNewCategory(e.target.value)}
                     className="border-orange-200 focus:border-orange-400"
-                    onKeyPress={(e) => e.key === 'Enter' && addCustomCategory()}
+                    onKeyPress={(e) => e.key === "Enter" && addCustomCategory()}
                   />
                   <Button
                     type="button"
@@ -199,16 +205,9 @@ export default function AddPlaygroundPage() {
                 {customRatingCategories.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {customRatingCategories.map((category) => (
-                      <Badge
-                        key={category}
-                        variant="secondary"
-                        className="bg-purple-100 text-purple-700 pr-1"
-                      >
+                      <Badge key={category} variant="secondary" className="bg-purple-100 text-purple-700 pr-1">
                         {category}
-                        <button
-                          onClick={() => removeCustomCategory(category)}
-                          className="ml-2 hover:text-purple-900"
-                        >
+                        <button onClick={() => removeCustomCategory(category)} className="ml-2 hover:text-purple-900">
                           <X className="w-3 h-3" />
                         </button>
                       </Badge>
@@ -219,19 +218,15 @@ export default function AddPlaygroundPage() {
 
               {/* Photo Upload */}
               <div>
-                <Label className="text-sm font-medium text-gray-700 mb-3 block">
-                  Photos (Optional)
-                </Label>
+                <Label className="text-sm font-medium text-gray-700 mb-3 block">Photos (Optional)</Label>
                 <div className="border-2 border-dashed border-orange-300 rounded-lg p-8 text-center hover:border-orange-400 transition-colors">
                   <Camera className="w-12 h-12 text-orange-400 mx-auto mb-4" />
                   <p className="text-gray-600 mb-2">Upload photos of the playground</p>
-                  <p className="text-sm text-gray-500 mb-4">
-                    Photos will be kept private in your personal collection
-                  </p>
+                  <p className="text-sm text-gray-500 mb-4">Photos will be kept private in your personal collection</p>
                   <Button
                     type="button"
                     variant="outline"
-                    className="border-orange-300 text-orange-600 hover:bg-orange-50"
+                    className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                   >
                     Choose Photos
                   </Button>
