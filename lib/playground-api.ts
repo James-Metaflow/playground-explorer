@@ -18,7 +18,10 @@ export interface PlaygroundData {
 export async function fetchPlaygroundsNearLocation(lat: number, lon: number, radiusKm = 10): Promise<PlaygroundData[]> {
   console.log(`🔍 Fetching playgrounds near ${lat}, ${lon} within ${radiusKm}km`)
 
-  const overpassQuery = `
+  // Try multiple queries with different approaches
+  const queries = [
+    // Query 1: Standard playground amenity
+    `
     [out:json][timeout:25];
     (
       node["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
@@ -26,62 +29,204 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
       relation["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
     );
     out center meta;
+    `,
+    // Query 2: Leisure areas that might include playgrounds
+    `
+    [out:json][timeout:25];
+    (
+      node["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      relation["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
+    );
+    out center meta;
+    `,
+    // Query 3: Parks that might contain playgrounds
+    `
+    [out:json][timeout:25];
+    (
+      node["leisure"="park"]["playground"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="park"]["playground"](around:${radiusKm * 1000},${lat},${lon});
+      node["leisure"="recreation_ground"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="recreation_ground"](around:${radiusKm * 1000},${lat},${lon});
+    );
+    out center meta;
+    `,
+    // Query 4: Broader search for any playground-related tags
+    `
+    [out:json][timeout:25];
+    (
+      node[~"playground"~"."](around:${radiusKm * 1000},${lat},${lon});
+      way[~"playground"~"."](around:${radiusKm * 1000},${lat},${lon});
+      node["play_area"="yes"](around:${radiusKm * 1000},${lat},${lon});
+      way["play_area"="yes"](around:${radiusKm * 1000},${lat},${lon});
+    );
+    out center meta;
+    `,
+  ]
+
+  const allPlaygrounds: PlaygroundData[] = []
+
+  for (let i = 0; i < queries.length; i++) {
+    try {
+      console.log(`📡 Trying query ${i + 1}/${queries.length}...`)
+
+      const response = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `data=${encodeURIComponent(queries[i])}`,
+      })
+
+      console.log(`📡 Query ${i + 1} response status:`, response.status, response.statusText)
+
+      if (!response.ok) {
+        console.warn(`⚠️ Query ${i + 1} failed:`, response.status, response.statusText)
+        continue
+      }
+
+      const data = await response.json()
+      console.log(`📊 Query ${i + 1} raw response:`, data)
+
+      if (data.elements && Array.isArray(data.elements) && data.elements.length > 0) {
+        const playgrounds = data.elements
+          .map((element: any) => {
+            const playground = {
+              id: `${element.type}-${element.id}`,
+              name:
+                element.tags?.name ||
+                element.tags?.["name:en"] ||
+                element.tags?.description ||
+                `${getPlaygroundType(element.tags)} ${element.id}`,
+              lat: element.lat || element.center?.lat,
+              lon: element.lon || element.center?.lon,
+              address: element.tags?.["addr:street"] || element.tags?.["addr:full"],
+              city: element.tags?.["addr:city"] || element.tags?.["addr:town"],
+              postcode: element.tags?.["addr:postcode"],
+              amenities: extractAmenities(element.tags),
+              surface: element.tags?.surface,
+              access: element.tags?.access,
+              opening_hours: element.tags?.opening_hours,
+            }
+            console.log(`🏰 Query ${i + 1} processed playground:`, playground)
+            return playground
+          })
+          .filter((playground: PlaygroundData) => playground.lat && playground.lon)
+
+        console.log(`✅ Query ${i + 1} found ${playgrounds.length} valid playgrounds`)
+        allPlaygrounds.push(...playgrounds)
+
+        // If we found some results, we can stop here or continue to get more
+        if (playgrounds.length > 0) {
+          console.log(`🎉 Found playgrounds with query ${i + 1}, continuing to search for more...`)
+        }
+      } else {
+        console.log(`📭 Query ${i + 1} returned no elements`)
+      }
+
+      // Small delay between queries to be nice to the API
+      if (i < queries.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    } catch (error) {
+      console.error(`❌ Query ${i + 1} error:`, error)
+      continue
+    }
+  }
+
+  // Remove duplicates based on coordinates (same playground might be found by multiple queries)
+  const uniquePlaygrounds = allPlaygrounds.filter(
+    (playground, index, self) =>
+      index ===
+      self.findIndex((p) => Math.abs(p.lat - playground.lat) < 0.0001 && Math.abs(p.lon - playground.lon) < 0.0001),
+  )
+
+  console.log(`🎯 Total unique playgrounds found: ${uniquePlaygrounds.length}`)
+
+  // If still no results, try a much broader search
+  if (uniquePlaygrounds.length === 0) {
+    console.log("🔄 No playgrounds found, trying broader search...")
+    return await tryBroaderSearch(lat, lon, radiusKm * 2)
+  }
+
+  return uniquePlaygrounds
+}
+
+// Try a much broader search with different terms
+async function tryBroaderSearch(lat: number, lon: number, radiusKm: number): Promise<PlaygroundData[]> {
+  console.log(`🔍 Trying broader search within ${radiusKm}km`)
+
+  const broadQuery = `
+    [out:json][timeout:30];
+    (
+      node["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      way["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      node["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
+      node["leisure"="park"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="park"](around:${radiusKm * 1000},${lat},${lon});
+      node["leisure"="recreation_ground"](around:${radiusKm * 1000},${lat},${lon});
+      way["leisure"="recreation_ground"](around:${radiusKm * 1000},${lat},${lon});
+    );
+    out center meta;
   `
 
   try {
-    console.log("📡 Making request to Overpass API...")
-
     const response = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: `data=${encodeURIComponent(overpassQuery)}`,
+      body: `data=${encodeURIComponent(broadQuery)}`,
     })
 
-    console.log("📡 Response status:", response.status, response.statusText)
-
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`)
+      throw new Error(`HTTP error! status: ${response.status}`)
     }
 
     const data = await response.json()
-    console.log("📊 Raw API response:", data)
+    console.log("📊 Broader search response:", data)
 
-    if (!data.elements || !Array.isArray(data.elements)) {
-      console.warn("⚠️ No elements in response or invalid format")
-      return []
-    }
-
-    const playgrounds = data.elements
-      .map((element: any) => {
-        const playground = {
-          id: element.id.toString(),
-          name: element.tags?.name || `Playground ${element.id}`,
+    if (data.elements && data.elements.length > 0) {
+      const playgrounds = data.elements
+        .map((element: any) => ({
+          id: `broad-${element.type}-${element.id}`,
+          name: element.tags?.name || element.tags?.["name:en"] || `${getPlaygroundType(element.tags)} ${element.id}`,
           lat: element.lat || element.center?.lat,
           lon: element.lon || element.center?.lon,
           address: element.tags?.["addr:street"],
-          city: element.tags?.["addr:city"],
+          city: element.tags?.["addr:city"] || element.tags?.["addr:town"],
           postcode: element.tags?.["addr:postcode"],
           amenities: extractAmenities(element.tags),
           surface: element.tags?.surface,
           access: element.tags?.access,
           opening_hours: element.tags?.opening_hours,
-        }
-        console.log("🏰 Processed playground:", playground)
-        return playground
-      })
-      .filter((playground: PlaygroundData) => playground.lat && playground.lon)
+        }))
+        .filter((playground: PlaygroundData) => playground.lat && playground.lon)
 
-    console.log(`✅ Found ${playgrounds.length} valid playgrounds`)
-    return playgrounds
+      console.log(`✅ Broader search found ${playgrounds.length} results`)
+      return playgrounds
+    }
   } catch (error) {
-    console.error("❌ Error fetching playgrounds:", error)
-
-    // Return some mock data for testing if API fails
-    console.log("🔄 Returning mock data for testing...")
-    return getMockPlaygrounds(lat, lon)
+    console.error("❌ Broader search failed:", error)
   }
+
+  // If everything fails, return mock data so the UI works
+  console.log("🔄 All searches failed, returning mock data for testing...")
+  return getMockPlaygrounds(lat, lon)
+}
+
+// Determine playground type from tags
+function getPlaygroundType(tags: any): string {
+  if (!tags) return "Playground"
+
+  if (tags.amenity === "playground") return "Playground"
+  if (tags.leisure === "playground") return "Play Area"
+  if (tags.leisure === "park") return "Park"
+  if (tags.leisure === "recreation_ground") return "Recreation Ground"
+  if (tags.play_area === "yes") return "Play Area"
+
+  return "Playground"
 }
 
 // Search playgrounds by location name (city, postcode, etc.)
@@ -121,7 +266,8 @@ export async function searchPlaygroundsByLocation(location: string): Promise<Pla
 
     console.log(`✅ Found coordinates for ${location}:`, numLat, numLon)
 
-    return fetchPlaygroundsNearLocation(numLat, numLon, 15)
+    // Use a larger radius for location searches
+    return fetchPlaygroundsNearLocation(numLat, numLon, 25)
   } catch (error) {
     console.error("❌ Error searching playgrounds by location:", error)
 
@@ -197,6 +343,17 @@ function extractAmenities(tags: any): string[] {
     amenities.push(...playgroundTypes)
   }
 
+  // Add general amenities based on leisure type
+  if (tags.leisure === "park") {
+    amenities.push("Park")
+  }
+  if (tags.leisure === "recreation_ground") {
+    amenities.push("Recreation Ground")
+  }
+  if (tags.sport) {
+    amenities.push(tags.sport)
+  }
+
   return amenities
 }
 
@@ -212,8 +369,10 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c
 }
 
-// Mock data for testing when APIs fail
+// Mock data for testing when APIs fail or return no results
 function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
+  console.log("🎭 Generating mock playgrounds for testing...")
+
   return [
     {
       id: "mock-1",
@@ -233,10 +392,21 @@ function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
       city: "Test City",
       amenities: ["sandpit", "seesaw"],
     },
+    {
+      id: "mock-3",
+      name: "Adventure Test Park",
+      lat: lat + 0.005,
+      lon: lon - 0.005,
+      address: "Adventure Avenue",
+      city: "Test City",
+      amenities: ["zip line", "climbing wall", "basketball hoop"],
+    },
   ]
 }
 
 function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
+  console.log(`🎭 Generating mock playgrounds for ${location}...`)
+
   const mockCoords = location.toLowerCase().includes("london")
     ? { lat: 51.5074, lon: -0.1278 }
     : location.toLowerCase().includes("manchester")
@@ -262,6 +432,16 @@ function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
       city: location,
       amenities: ["zip line", "climbing wall", "sandpit"],
     },
+    {
+      id: `mock-${location}-3`,
+      name: `${location} Family Play Area`,
+      lat: mockCoords.lat + 0.005,
+      lon: mockCoords.lon - 0.005,
+      address: `Family Lane, ${location}`,
+      city: location,
+      amenities: ["toddler area", "picnic tables", "benches"],
+    },
   ]
 }
+
 
