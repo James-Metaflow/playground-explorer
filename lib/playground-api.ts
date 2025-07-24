@@ -89,35 +89,69 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
       console.log(`📊 Query ${i + 1} raw response:`, data)
 
       if (data.elements && Array.isArray(data.elements) && data.elements.length > 0) {
-        const playgrounds = data.elements
-          .map((element: any) => {
-            const playground = {
-              id: `${element.type}-${element.id}`,
-              name:
-                element.tags?.name ||
-                element.tags?.["name:en"] ||
-                element.tags?.description ||
-                `${getPlaygroundType(element.tags)} ${element.id}`,
-              lat: element.lat || element.center?.lat,
-              lon: element.lon || element.center?.lon,
-              address: element.tags?.["addr:street"] || element.tags?.["addr:full"],
-              city: element.tags?.["addr:city"] || element.tags?.["addr:town"],
-              postcode: element.tags?.["addr:postcode"],
-              amenities: extractAmenities(element.tags),
-              surface: element.tags?.surface,
-              access: element.tags?.access,
-              opening_hours: element.tags?.opening_hours,
-            }
-            console.log(`🏰 Query ${i + 1} processed playground:`, playground)
-            return playground
-          })
-          .filter((playground: PlaygroundData) => playground.lat && playground.lon)
+        const playgrounds = data.elements.map(async (element: any) => {
+          const name =
+            element.tags?.name ||
+            element.tags?.["name:en"] ||
+            element.tags?.description ||
+            `${getPlaygroundType(element.tags)} ${element.id}`
 
-        console.log(`✅ Query ${i + 1} found ${playgrounds.length} valid playgrounds`)
-        allPlaygrounds.push(...playgrounds)
+          // Try to get address from tags
+          let address = element.tags?.["addr:street"] || element.tags?.["addr:full"]
+          let city = element.tags?.["addr:city"] || element.tags?.["addr:town"]
+          let postcode = element.tags?.["addr:postcode"]
+
+          // If address is missing, try reverse geocoding
+          if (!address && element.lat && element.lon) {
+            try {
+              const reverseGeocodeUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${element.lat}&lon=${element.lon}`
+              const reverseGeocodeResponse = await fetch(reverseGeocodeUrl, {
+                headers: {
+                  "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
+                },
+              })
+              const reverseGeocodeData = await reverseGeocodeResponse.json()
+
+              if (reverseGeocodeData?.address) {
+                address = reverseGeocodeData.address.road || reverseGeocodeData.address.neighbourhood
+                city = reverseGeocodeData.address.city || reverseGeocodeData.address.town
+                postcode = reverseGeocodeData.address.postcode
+                console.log(`✅ Reverse geocoding success for ${name}:`, reverseGeocodeData.address)
+              }
+            } catch (geocodeError) {
+              console.warn(`⚠️ Reverse geocoding failed for ${name}:`, geocodeError)
+            }
+          }
+
+          const playground = {
+            id: `${element.type}-${element.id}`,
+            name: name,
+            lat: element.lat || element.center?.lat,
+            lon: element.lon || element.center?.lon,
+            address: address,
+            city: city,
+            postcode: postcode,
+            amenities: extractAmenities(element.tags),
+            surface: element.tags?.surface,
+            access: element.tags?.access,
+            opening_hours: element.tags?.opening_hours,
+          }
+          console.log(`🏰 Query ${i + 1} processed playground:`, playground)
+          return playground
+        })
+
+        // Resolve all promises before filtering
+        const resolvedPlaygrounds = await Promise.all(playgrounds)
+
+        const validPlaygrounds = resolvedPlaygrounds.filter(
+          (playground: PlaygroundData) => playground.lat && playground.lon,
+        )
+
+        console.log(`✅ Query ${i + 1} found ${validPlaygrounds.length} valid playgrounds`)
+        allPlaygrounds.push(...validPlaygrounds)
 
         // If we found some results, we can stop here or continue to get more
-        if (playgrounds.length > 0) {
+        if (validPlaygrounds.length > 0) {
           console.log(`🎉 Found playgrounds with query ${i + 1}, continuing to search for more...`)
         }
       } else {
@@ -135,11 +169,12 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
   }
 
   // Remove duplicates based on coordinates (same playground might be found by multiple queries)
-  const uniquePlaygrounds = allPlaygrounds.filter(
-    (playground, index, self) =>
-      index ===
-      self.findIndex((p) => Math.abs(p.lat - playground.lat) < 0.0001 && Math.abs(p.lon - playground.lon) < 0.0001),
-  )
+  const uniquePlaygrounds = allPlaygrounds.filter((playground, index, self) => {
+    const firstIndex = self.findIndex(
+      (p) => Math.abs(p.lat - playground.lat) < 0.0001 && Math.abs(p.lon - playground.lon) < 0.0001,
+    )
+    return index === firstIndex
+  })
 
   console.log(`🎯 Total unique playgrounds found: ${uniquePlaygrounds.length}`)
 
@@ -443,5 +478,6 @@ function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
     },
   ]
 }
+
 
 
