@@ -1,65 +1,109 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, MapPin, Star, Filter, Camera } from "lucide-react"
+import { Search, MapPin, Star, Filter, Camera, Loader2 } from 'lucide-react'
 import Link from "next/link"
+import AuthButton from "@/components/auth-button"
+import { supabase } from "@/lib/supabase"
 
-const mockPlaygrounds = [
-  {
-    id: 1,
-    name: "Sunshine Adventure Park",
-    location: "Hyde Park, London",
-    rating: 4.8,
-    totalRatings: 124,
-    distance: "0.5 miles",
-    features: ["Swings", "Slides", "Climbing Frame", "Sand Pit"],
-    ageRange: "2-12 years",
-    hasPhotos: true,
-  },
-  {
-    id: 2,
-    name: "Rainbow Play Area",
-    location: "Regent's Park, London",
-    rating: 4.6,
-    totalRatings: 89,
-    distance: "1.2 miles",
-    features: ["Swings", "See-saw", "Monkey Bars"],
-    ageRange: "3-10 years",
-    hasPhotos: false,
-  },
-  {
-    id: 3,
-    name: "Castle Playground",
-    location: "Hampstead Heath, London",
-    rating: 4.9,
-    totalRatings: 156,
-    distance: "2.1 miles",
-    features: ["Castle Structure", "Zip Line", "Climbing Wall", "Slides"],
-    ageRange: "4-14 years",
-    hasPhotos: true,
-  },
-  {
-    id: 4,
-    name: "Little Explorers Park",
-    location: "Greenwich Park, London",
-    rating: 4.4,
-    totalRatings: 67,
-    distance: "3.5 miles",
-    features: ["Toddler Area", "Swings", "Spring Riders"],
-    ageRange: "1-6 years",
-    hasPhotos: true,
-  },
-]
+type Playground = {
+  id: string
+  name: string
+  location: string
+  description: string | null
+  age_range: string | null
+  equipment: string[] | null
+  facilities: string[] | null
+  created_at: string
+}
 
 export default function SearchPage() {
   const [searchQuery, setSearchQuery] = useState("")
-  const [sortBy, setSortBy] = useState("distance")
+  const [sortBy, setSortBy] = useState("name")
   const [filterAge, setFilterAge] = useState("all")
+  const [playgrounds, setPlaygrounds] = useState<Playground[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filteredPlaygrounds, setFilteredPlaygrounds] = useState<Playground[]>([])
+
+  // Fetch playgrounds from database
+  useEffect(() => {
+    async function fetchPlaygrounds() {
+      try {
+        const { data, error } = await supabase
+          .from('playgrounds')
+          .select('*')
+          .order('created_at', { ascending: false })
+
+        if (error) {
+          console.error('Error fetching playgrounds:', error)
+        } else {
+          setPlaygrounds(data || [])
+        }
+      } catch (error) {
+        console.error('Error:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchPlaygrounds()
+  }, [])
+
+  // Filter and sort playgrounds
+  useEffect(() => {
+    let filtered = [...playgrounds]
+
+    // Apply search filter
+    if (searchQuery) {
+      filtered = filtered.filter(
+        (playground) =>
+          playground.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          playground.location.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    }
+
+    // Apply age filter
+    if (filterAge !== "all") {
+      filtered = filtered.filter((playground) => {
+        if (!playground.age_range) return false
+        const ageRange = playground.age_range.toLowerCase()
+        
+        switch (filterAge) {
+          case "toddler":
+            return ageRange.includes("1-3") || ageRange.includes("0-3")
+          case "preschool":
+            return ageRange.includes("3-6") || ageRange.includes("2-6")
+          case "school":
+            return ageRange.includes("6-12") || ageRange.includes("5-12")
+          case "teen":
+            return ageRange.includes("12") || ageRange.includes("14")
+          default:
+            return true
+        }
+      })
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case "name":
+          return a.name.localeCompare(b.name)
+        case "location":
+          return a.location.localeCompare(b.location)
+        case "newest":
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        default:
+          return 0
+      }
+    })
+
+    setFilteredPlaygrounds(filtered)
+  }, [playgrounds, searchQuery, filterAge, sortBy])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-yellow-100 via-pink-50 to-blue-100">
@@ -85,9 +129,7 @@ export default function SearchPage() {
               <Link href="/profile" className="text-gray-700 hover:text-orange-500 font-medium">
                 My Profile
               </Link>
-              <Button className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600">
-                Sign In
-              </Button>
+              <AuthButton />
             </nav>
           </div>
         </div>
@@ -121,9 +163,9 @@ export default function SearchPage() {
                     <SelectValue placeholder="Sort by" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="distance">Distance</SelectItem>
-                    <SelectItem value="rating">Rating</SelectItem>
                     <SelectItem value="name">Name</SelectItem>
+                    <SelectItem value="location">Location</SelectItem>
+                    <SelectItem value="newest">Newest</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select value={filterAge} onValueChange={setFilterAge}>
@@ -144,80 +186,133 @@ export default function SearchPage() {
           </CardContent>
         </Card>
 
+        {/* Loading State */}
+        {loading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+            <span className="ml-2 text-gray-600">Loading playgrounds...</span>
+          </div>
+        )}
+
         {/* Results */}
-        <div className="grid gap-6">
-          {mockPlaygrounds.map((playground) => (
-            <Card
-              key={playground.id}
-              className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow"
-            >
-              <CardContent className="p-6">
-                <div className="flex flex-col md:flex-row gap-6">
-                  <div className="md:w-48 h-32 bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center">
-                    <span className="text-4xl">🏰</span>
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="text-xl font-bold text-gray-800 mb-1">{playground.name}</h3>
-                        <div className="flex items-center text-gray-600 mb-2">
-                          <MapPin className="w-4 h-4 mr-1" />
-                          <span className="text-sm">
-                            {playground.location} • {playground.distance}
-                          </span>
+        {!loading && (
+          <>
+            <div className="mb-4">
+              <p className="text-gray-600">
+                Found {filteredPlaygrounds.length} playground{filteredPlaygrounds.length !== 1 ? 's' : ''}
+                {searchQuery && ` matching "${searchQuery}"`}
+              </p>
+            </div>
+
+            {filteredPlaygrounds.length === 0 ? (
+              <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+                <CardContent className="p-12 text-center">
+                  <div className="text-6xl mb-4">🏰</div>
+                  <h3 className="text-xl font-semibold mb-2">No playgrounds found</h3>
+                  <p className="text-gray-600 mb-6">
+                    {searchQuery
+                      ? `No playgrounds match your search for "${searchQuery}"`
+                      : "No playgrounds available yet"}
+                  </p>
+                  <Button
+                    asChild
+                    className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                  >
+                    <Link href="/add-playground">Add the First Playground</Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-6">
+                {filteredPlaygrounds.map((playground) => (
+                  <Card
+                    key={playground.id}
+                    className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow"
+                  >
+                    <CardContent className="p-6">
+                      <div className="flex flex-col md:flex-row gap-6">
+                        <div className="md:w-48 h-32 bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center">
+                          <span className="text-4xl">🏰</span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <h3 className="text-xl font-bold text-gray-800 mb-1">{playground.name}</h3>
+                              <div className="flex items-center text-gray-600 mb-2">
+                                <MapPin className="w-4 h-4 mr-1" />
+                                <span className="text-sm">{playground.location}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {playground.age_range && (
+                            <div className="flex items-center gap-4 mb-3">
+                              <Badge variant="outline" className="border-green-300 text-green-700">
+                                {playground.age_range}
+                              </Badge>
+                            </div>
+                          )}
+
+                          {playground.equipment && playground.equipment.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-4">
+                              {playground.equipment.slice(0, 4).map((equipment) => (
+                                <Badge key={equipment} variant="secondary" className="bg-blue-100 text-blue-700">
+                                  {equipment}
+                                </Badge>
+                              ))}
+                              {playground.equipment.length > 4 && (
+                                <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                                  +{playground.equipment.length - 4} more
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+
+                          {playground.description && (
+                            <p className="text-gray-600 mb-4 line-clamp-2">{playground.description}</p>
+                          )}
+
+                          <div className="flex gap-3">
+                            <Button
+                              asChild
+                              className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                            >
+                              <Link href={`/playground/${playground.id}`}>View Details</Link>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
+                            >
+                              Add Rating
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                      {playground.hasPhotos && (
-                        <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                          <Camera className="w-3 h-3 mr-1" />
-                          Photos
-                        </Badge>
-                      )}
-                    </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
-                    <div className="flex items-center gap-4 mb-3">
-                      <div className="flex items-center gap-1">
-                        <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />
-                        <span className="font-semibold">{playground.rating}</span>
-                        <span className="text-gray-500 text-sm">({playground.totalRatings} reviews)</span>
-                      </div>
-                      <Badge variant="outline" className="border-green-300 text-green-700">
-                        {playground.ageRange}
-                      </Badge>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {playground.features.map((feature) => (
-                        <Badge key={feature} variant="secondary" className="bg-blue-100 text-blue-700">
-                          {feature}
-                        </Badge>
-                      ))}
-                    </div>
-
-                    <div className="flex gap-3">
-                      <Button className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600">
-                        View Details
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                      >
-                        Add Rating
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+        {/* Add Playground CTA */}
+        {!loading && filteredPlaygrounds.length > 0 && (
+          <div className="text-center mt-12">
+            <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+              <CardContent className="p-8">
+                <h3 className="text-xl font-semibold mb-2">Know of another great playground?</h3>
+                <p className="text-gray-600 mb-4">Help other families discover amazing play areas!</p>
+                <Button
+                  asChild
+                  className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                >
+                  <Link href="/add-playground">Add a Playground</Link>
+                </Button>
               </CardContent>
             </Card>
-          ))}
-        </div>
-
-        {/* Load More */}
-        <div className="text-center mt-8">
-          <Button variant="outline" className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent">
-            Load More Playgrounds
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )
