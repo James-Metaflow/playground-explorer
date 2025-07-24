@@ -14,6 +14,15 @@ export interface PlaygroundData {
   opening_hours?: string
 }
 
+// Function to check if two playgrounds are duplicates based on name and location
+function areDuplicates(playground1: PlaygroundData, playground2: PlaygroundData): boolean {
+  const nameSimilarity = playground1.name.toLowerCase() === playground2.name.toLowerCase()
+  const locationProximity =
+    Math.abs(playground1.lat - playground2.lat) < 0.0005 && Math.abs(playground1.lon - playground2.lon) < 0.0005
+
+  return nameSimilarity && locationProximity
+}
+
 // Fetch playgrounds from OpenStreetMap using Overpass API
 export async function fetchPlaygroundsNearLocation(lat: number, lon: number, radiusKm = 10): Promise<PlaygroundData[]> {
   console.log(`🔍 Fetching playgrounds near ${lat}, ${lon} within ${radiusKm}km`)
@@ -81,8 +90,7 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
       console.log(`📡 Query ${i + 1} response status:`, response.status, response.statusText)
 
       if (!response.ok) {
-        console.warn(`⚠️ Query ${i + 1} failed:`, response.status, response.statusText)
-        continue
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const data = await response.json()
@@ -90,11 +98,9 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
 
       if (data.elements && Array.isArray(data.elements) && data.elements.length > 0) {
         const playgrounds = data.elements.map(async (element: any) => {
+          // Prioritize name tag
           const name =
-            element.tags?.name ||
-            element.tags?.["name:en"] ||
-            element.tags?.description ||
-            `${getPlaygroundType(element.tags)} ${element.id}`
+            element.tags?.name || element.tags?.["name:en"] || `${getPlaygroundType(element.tags)} ${element.id}`
 
           // Try to get address from tags
           let address = element.tags?.["addr:street"] || element.tags?.["addr:full"]
@@ -168,13 +174,13 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
     }
   }
 
-  // Remove duplicates based on coordinates (same playground might be found by multiple queries)
-  const uniquePlaygrounds = allPlaygrounds.filter((playground, index, self) => {
-    const firstIndex = self.findIndex(
-      (p) => Math.abs(p.lat - playground.lat) < 0.0001 && Math.abs(p.lon - playground.lon) < 0.0001,
-    )
-    return index === firstIndex
-  })
+  // Remove duplicates based on coordinates and name
+  const uniquePlaygrounds = allPlaygrounds.reduce((acc: PlaygroundData[], playground) => {
+    if (!acc.some((existingPlayground) => areDuplicates(playground, existingPlayground))) {
+      acc.push(playground)
+    }
+    return acc
+  }, [])
 
   console.log(`🎯 Total unique playgrounds found: ${uniquePlaygrounds.length}`)
 
@@ -372,12 +378,6 @@ function extractAmenities(tags: any): string[] {
     }
   })
 
-  // Check playground tag for multiple equipment
-  if (tags.playground) {
-    const playgroundTypes = tags.playground.split(";")
-    amenities.push(...playgroundTypes)
-  }
-
   // Add general amenities based on leisure type
   if (tags.leisure === "park") {
     amenities.push("Park")
@@ -478,6 +478,7 @@ function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
     },
   ]
 }
+
 
 
 
