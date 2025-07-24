@@ -28,39 +28,60 @@ export default function SearchPage() {
   const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
   const [debugMode, setDebugMode] = useState(false)
 
+  // Add immediate logging when component loads
+  useEffect(() => {
+    console.log("🚀 SearchPage component loaded!")
+    console.log("📍 Current user location:", userLocation)
+    console.log("🗺️ Current map center:", mapCenter)
+    console.log("🏰 Current playgrounds:", playgrounds)
+  }, [])
+
   // Test function for debugging
   const runDebugTest = async () => {
-    console.log("🐛 Running debug test...")
+    console.log("=".repeat(50))
+    console.log("🐛 STARTING DEBUG TEST")
+    console.log("=".repeat(50))
     setDebugMode(true)
 
     try {
       // Test 1: Basic API connectivity
-      console.log("Test 1: Testing basic connectivity...")
+      console.log("🧪 Test 1: Testing basic connectivity...")
       const testResponse = await fetch("https://httpbin.org/get")
-      console.log("✅ Basic connectivity works:", testResponse.ok)
+      console.log("✅ Basic connectivity result:", testResponse.ok, testResponse.status)
 
       // Test 2: Test geocoding
-      console.log("Test 2: Testing geocoding...")
+      console.log("🧪 Test 2: Testing geocoding for London...")
       const geocodeTest = await fetch(
         "https://nominatim.openstreetmap.org/search?format=json&q=London&countrycodes=gb&limit=1",
+        {
+          headers: {
+            "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
+          },
+        },
       )
+      console.log("📍 Geocoding response status:", geocodeTest.status, geocodeTest.statusText)
       const geocodeData = await geocodeTest.json()
-      console.log("✅ Geocoding test:", geocodeData)
+      console.log("📍 Geocoding data:", geocodeData)
 
       // Test 3: Test playground search
-      console.log("Test 3: Testing playground search...")
+      console.log("🧪 Test 3: Testing playground search...")
       const playgroundResults = await searchPlaygroundsByLocation("London")
-      console.log("✅ Playground search test:", playgroundResults)
+      console.log("🏰 Playground search results:", playgroundResults)
+      console.log("🏰 Number of playgrounds found:", playgroundResults.length)
 
       setPlaygrounds(playgroundResults)
       if (playgroundResults.length > 0) {
         setMapCenter([playgroundResults[0].lat, playgroundResults[0].lon])
+        console.log("📍 Map centered on first result:", playgroundResults[0].lat, playgroundResults[0].lon)
       }
+
+      console.log("✅ DEBUG TEST COMPLETED SUCCESSFULLY!")
     } catch (error) {
-      console.error("❌ Debug test failed:", error)
+      console.error("❌ DEBUG TEST FAILED:", error)
       setError(`Debug test failed: ${error}`)
     }
 
+    console.log("=".repeat(50))
     setDebugMode(false)
   }
 
@@ -215,6 +236,49 @@ export default function SearchPage() {
         </div>
       </header>
 
+      {/* Debug Panel - Make it more prominent */}
+      <Card className="bg-yellow-50 border-2 border-yellow-300 mb-8 shadow-lg">
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
+                <Bug className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="font-bold text-yellow-800 text-lg">🔧 Debug Mode</h3>
+                <p className="text-yellow-700 text-sm">Test the search functionality step by step</p>
+              </div>
+            </div>
+            <Button
+              onClick={runDebugTest}
+              disabled={debugMode}
+              size="lg"
+              className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold px-6 py-3"
+            >
+              {debugMode ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <Bug className="w-5 h-5 mr-2" />🧪 Run Debug Test
+                </>
+              )}
+            </Button>
+          </div>
+          <div className="bg-yellow-100 p-4 rounded-lg border border-yellow-200">
+            <p className="text-yellow-800 font-medium mb-2">📋 Instructions:</p>
+            <ol className="text-yellow-700 text-sm space-y-1 list-decimal list-inside">
+              <li>Open your browser console first (Cmd + Option + I on Mac, then click Console tab)</li>
+              <li>Click the "Run Debug Test" button above</li>
+              <li>Watch the detailed logs in the console to see what's working/failing</li>
+              <li>Try the search buttons below and check console for more logs</li>
+            </ol>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="container mx-auto px-4 py-8">
         {/* Search Header */}
         <div className="text-center mb-8">
@@ -225,30 +289,6 @@ export default function SearchPage() {
             Discover actual playgrounds across the United Kingdom using OpenStreetMap data
           </p>
         </div>
-
-        {/* Debug Panel */}
-        <Card className="bg-yellow-50 border-yellow-200 mb-8">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Bug className="w-5 h-5 text-yellow-600" />
-                <span className="font-medium text-yellow-800">Debug Mode</span>
-              </div>
-              <Button
-                onClick={runDebugTest}
-                disabled={debugMode}
-                size="sm"
-                variant="outline"
-                className="border-yellow-300 text-yellow-700 hover:bg-yellow-100 bg-transparent"
-              >
-                {debugMode ? <Loader2 className="w-4 h-4 animate-spin" /> : "Run Debug Test"}
-              </Button>
-            </div>
-            <p className="text-yellow-700 text-sm mt-2">
-              Click "Run Debug Test" to test API connectivity and see detailed logs in the browser console (F12).
-            </p>
-          </CardContent>
-        </Card>
 
         {/* Search Controls */}
         <Card className="bg-white/80 backdrop-blur-sm border-orange-200 mb-8">
@@ -549,6 +589,7 @@ export default function SearchPage() {
     </div>
   )
 }
+
 
 
 
