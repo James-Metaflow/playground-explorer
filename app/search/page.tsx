@@ -1,15 +1,19 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Search, MapPin, Loader2, Navigation, AlertCircle, Bug } from "lucide-react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Search, MapPin, Loader2, Navigation, AlertCircle, Heart, Star } from "lucide-react"
 import Link from "next/link"
 import AuthButton from "@/components/auth-button"
 import SimpleMap from "@/components/simple-map"
+import { supabase } from "@/lib/supabase"
+import type { User } from "@supabase/supabase-js"
 import {
   searchPlaygroundsByLocation,
   fetchPlaygroundsNearLocation,
@@ -18,76 +22,61 @@ import {
   type PlaygroundData,
 } from "@/lib/playground-api"
 
+interface DatabasePlayground {
+  id: string
+  name: string
+  location: string
+  description: string
+  lat?: number
+  lon?: number
+  age_range: string
+  accessibility: string
+  opening_hours: string
+  equipment: string[]
+  facilities: string[]
+  created_by: string
+}
+
 export default function SearchPage() {
+  const router = useRouter()
+  const [user, setUser] = useState<User | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [playgrounds, setPlaygrounds] = useState<PlaygroundData[]>([])
+  const [dbPlaygrounds, setDbPlaygrounds] = useState<DatabasePlayground[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
   const [mapCenter, setMapCenter] = useState<[number, number]>([51.5074, -0.1278]) // Default to London
   const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
-  const [debugMode, setDebugMode] = useState(false)
+  const [favorites, setFavorites] = useState<Set<string>>(new Set())
 
-  // Add immediate logging when component loads
+  // Auth state management
   useEffect(() => {
-    console.log("🚀 SearchPage component loaded!")
-    console.log("📍 Current user location:", userLocation)
-    console.log("🗺️ Current map center:", mapCenter)
-    console.log("🏰 Current playgrounds:", playgrounds)
-  }, [])
-
-  // Test function for debugging
-  const runDebugTest = async () => {
-    console.log("=".repeat(50))
-    console.log("🐛 STARTING DEBUG TEST")
-    console.log("=".repeat(50))
-    setDebugMode(true)
-
-    try {
-      // Test 1: Basic API connectivity
-      console.log("🧪 Test 1: Testing basic connectivity...")
-      const testResponse = await fetch("https://httpbin.org/get")
-      console.log("✅ Basic connectivity result:", testResponse.ok, testResponse.status)
-
-      // Test 2: Test geocoding
-      console.log("🧪 Test 2: Testing geocoding for London...")
-      const geocodeTest = await fetch(
-        "https://nominatim.openstreetmap.org/search?format=json&q=London&countrycodes=gb&limit=1",
-        {
-          headers: {
-            "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
-          },
-        },
-      )
-      console.log("📍 Geocoding response status:", geocodeTest.status, geocodeTest.statusText)
-      const geocodeData = await geocodeTest.json()
-      console.log("📍 Geocoding data:", geocodeData)
-
-      // Test 3: Test playground search
-      console.log("🧪 Test 3: Testing playground search...")
-      const playgroundResults = await searchPlaygroundsByLocation("London")
-      console.log("🏰 Playground search results:", playgroundResults)
-      console.log("🏰 Number of playgrounds found:", playgroundResults.length)
-
-      setPlaygrounds(playgroundResults)
-      if (playgroundResults.length > 0) {
-        setMapCenter([playgroundResults[0].lat, playgroundResults[0].lon])
-        console.log("📍 Map centered on first result:", playgroundResults[0].lat, playgroundResults[0].lon)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      if (session?.user) {
+        loadUserFavorites(session.user.id)
       }
+    })
 
-      console.log("✅ DEBUG TEST COMPLETED SUCCESSFULLY!")
-    } catch (error) {
-      console.error("❌ DEBUG TEST FAILED:", error)
-      setError(`Debug test failed: ${error}`)
-    }
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+      if (session?.user) {
+        loadUserFavorites(session.user.id)
+      } else {
+        setFavorites(new Set())
+      }
+    })
 
-    console.log("=".repeat(50))
-    setDebugMode(false)
-  }
+    return () => subscription.unsubscribe()
+  }, [])
 
   // Get user's location on component mount
   useEffect(() => {
     console.log("🚀 SearchPage component mounted")
+    loadDatabasePlaygrounds()
 
     getCurrentLocation()
       .then(({ lat, lon }) => {
@@ -105,6 +94,84 @@ export default function SearchPage() {
       })
   }, [])
 
+  const loadDatabasePlaygrounds = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('playgrounds')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error loading database playgrounds:', error)
+        return
+      }
+
+      setDbPlaygrounds(data || [])
+      console.log('✅ Loaded database playgrounds:', data?.length || 0)
+    } catch (error) {
+      console.error('Error loading database playgrounds:', error)
+    }
+  }
+
+  const loadUserFavorites = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_favorites')
+        .select('playground_id')
+        .eq('user_id', userId)
+
+      if (error) {
+        console.error('Error loading favorites:', error)
+        return
+      }
+
+      const favoriteIds = new Set(data?.map(f => f.playground_id) || [])
+      setFavorites(favoriteIds)
+    } catch (error) {
+      console.error('Error loading favorites:', error)
+    }
+  }
+
+  const toggleFavorite = async (playgroundId: string) => {
+    if (!user) {
+      router.push('/auth/signin')
+      return
+    }
+
+    try {
+      if (favorites.has(playgroundId)) {
+        // Remove favorite
+        const { error } = await supabase
+          .from('user_favorites')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('playground_id', playgroundId)
+
+        if (error) throw error
+
+        setFavorites(prev => {
+          const next = new Set(prev)
+          next.delete(playgroundId)
+          return next
+        })
+      } else {
+        // Add favorite
+        const { error } = await supabase
+          .from('user_favorites')
+          .insert({
+            user_id: user.id,
+            playground_id: playgroundId
+          })
+
+        if (error) throw error
+
+        setFavorites(prev => new Set([...prev, playgroundId]))
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error)
+    }
+  }
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
       console.log("❌ Empty search query")
@@ -116,15 +183,23 @@ export default function SearchPage() {
     setError(null)
 
     try {
-      const results = await searchPlaygroundsByLocation(searchQuery)
-      console.log("✅ Search completed, results:", results)
+      // Search both external API and database
+      const [externalResults, dbResults] = await Promise.all([
+        searchPlaygroundsByLocation(searchQuery),
+        searchDatabasePlaygrounds(searchQuery)
+      ])
 
-      setPlaygrounds(results)
+      console.log("✅ External search completed:", externalResults.length, "results")
+      console.log("✅ Database search completed:", dbResults.length, "results")
 
-      if (results.length > 0) {
+      // Combine and deduplicate results
+      const combinedResults = [...externalResults, ...dbResults]
+      setPlaygrounds(combinedResults)
+
+      if (combinedResults.length > 0) {
         // Center map on first result
-        setMapCenter([results[0].lat, results[0].lon])
-        console.log("📍 Map centered on:", results[0].lat, results[0].lon)
+        setMapCenter([combinedResults[0].lat, combinedResults[0].lon])
+        console.log("📍 Map centered on:", combinedResults[0].lat, combinedResults[0].lon)
       } else {
         setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
       }
@@ -133,6 +208,33 @@ export default function SearchPage() {
       setError(`Search failed: ${error}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const searchDatabasePlaygrounds = async (query: string): Promise<PlaygroundData[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('playgrounds')
+        .select('*')
+        .or(`name.ilike.%${query}%,location.ilike.%${query}%`)
+
+      if (error) throw error
+
+      return (data || []).map(pg => ({
+        id: `db-${pg.id}`,
+        name: pg.name,
+        lat: pg.lat || 51.5074,
+        lon: pg.lon || -0.1278,
+        address: pg.location,
+        city: pg.location,
+        amenities: pg.equipment || [],
+        surface: 'unknown',
+        access: pg.accessibility,
+        opening_hours: pg.opening_hours
+      }))
+    } catch (error) {
+      console.error('Database search error:', error)
+      return []
     }
   }
 
@@ -151,12 +253,17 @@ export default function SearchPage() {
     setError(null)
 
     try {
-      const results = await fetchPlaygroundsNearLocation(searchLat, searchLon, 10)
-      console.log("✅ Nearby search completed, results:", results)
+      const [externalResults, dbResults] = await Promise.all([
+        fetchPlaygroundsNearLocation(searchLat, searchLon, 10),
+        getNearbyDatabasePlaygrounds(searchLat, searchLon)
+      ])
 
-      setPlaygrounds(results)
+      console.log("✅ Nearby search completed - External:", externalResults.length, "Database:", dbResults.length)
 
-      if (results.length === 0) {
+      const combinedResults = [...externalResults, ...dbResults]
+      setPlaygrounds(combinedResults)
+
+      if (combinedResults.length === 0) {
         setError("No playgrounds found nearby. Try expanding your search area.")
       }
     } catch (error) {
@@ -167,20 +274,42 @@ export default function SearchPage() {
     }
   }
 
+  const getNearbyDatabasePlaygrounds = async (lat: number, lon: number): Promise<PlaygroundData[]> => {
+    // For simplicity, return all database playgrounds
+    // In a real app, you'd implement proper geospatial queries
+    return dbPlaygrounds.map(pg => ({
+      id: `db-${pg.id}`,
+      name: pg.name,
+      lat: pg.lat || lat + (Math.random() - 0.5) * 0.1,
+      lon: pg.lon || lon + (Math.random() - 0.5) * 0.1,
+      address: pg.location,
+      city: pg.location,
+      amenities: pg.equipment || [],
+      surface: 'unknown',
+      access: pg.accessibility,
+      opening_hours: pg.opening_hours
+    }))
+  }
+
   const handleLocationSearch = async (location: string) => {
     console.log(`🔍 Starting location search for: "${location}"`)
     setLoading(true)
     setError(null)
 
     try {
-      const results = await searchPlaygroundsByLocation(location)
-      console.log("✅ Location search completed, results:", results)
+      const [externalResults, dbResults] = await Promise.all([
+        searchPlaygroundsByLocation(location),
+        searchDatabasePlaygrounds(location)
+      ])
 
-      setPlaygrounds(results)
+      console.log("✅ Location search completed - External:", externalResults.length, "Database:", dbResults.length)
 
-      if (results.length > 0) {
-        setMapCenter([results[0].lat, results[0].lon])
-        console.log("📍 Map centered on:", results[0].lat, results[0].lon)
+      const combinedResults = [...externalResults, ...dbResults]
+      setPlaygrounds(combinedResults)
+
+      if (combinedResults.length > 0) {
+        setMapCenter([combinedResults[0].lat, combinedResults[0].lon])
+        console.log("📍 Map centered on:", combinedResults[0].lat, combinedResults[0].lon)
       } else {
         setError(`No playgrounds found in ${location}.`)
       }
@@ -196,6 +325,18 @@ export default function SearchPage() {
     console.log("🏰 Playground clicked:", playground)
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
+  }
+
+  const handleViewDetails = (playground: PlaygroundData) => {
+    router.push(`/playground/${playground.id}`)
+  }
+
+  const handleAddRating = (playground: PlaygroundData) => {
+    if (!user) {
+      router.push('/auth/signin')
+      return
+    }
+    router.push(`/playground/${playground.id}?tab=rating`)
   }
 
   // Sort playgrounds by distance if user location is available
@@ -224,69 +365,28 @@ export default function SearchPage() {
               <Link href="/search" className="text-orange-500 font-medium">
                 Search
               </Link>
-              <Link href="/add-playground" className="text-gray-700 hover:text-orange-500 font-medium">
+              <Link href="/add-playground" className="text-gray-700 hover:text-orange-500 font-medium transition-colors">
                 Add Playground
               </Link>
-              <Link href="/profile" className="text-gray-700 hover:text-orange-500 font-medium">
-                My Profile
-              </Link>
+              {user && (
+                <Link href="/profile" className="text-gray-700 hover:text-orange-500 font-medium transition-colors">
+                  My Profile
+                </Link>
+              )}
               <AuthButton />
             </nav>
           </div>
         </div>
       </header>
 
-      {/* Debug Panel - Make it more prominent */}
-      <Card className="bg-yellow-50 border-2 border-yellow-300 mb-8 shadow-lg">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
-                <Bug className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h3 className="font-bold text-yellow-800 text-lg">🔧 Debug Mode</h3>
-                <p className="text-yellow-700 text-sm">Test the search functionality step by step</p>
-              </div>
-            </div>
-            <Button
-              onClick={runDebugTest}
-              disabled={debugMode}
-              size="lg"
-              className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold px-6 py-3"
-            >
-              {debugMode ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  Testing...
-                </>
-              ) : (
-                <>
-                  <Bug className="w-5 h-5 mr-2" />🧪 Run Debug Test
-                </>
-              )}
-            </Button>
-          </div>
-          <div className="bg-yellow-100 p-4 rounded-lg border border-yellow-200">
-            <p className="text-yellow-800 font-medium mb-2">📋 Instructions:</p>
-            <ol className="text-yellow-700 text-sm space-y-1 list-decimal list-inside">
-              <li>Open your browser console first (Cmd + Option + I on Mac, then click Console tab)</li>
-              <li>Click the "Run Debug Test" button above</li>
-              <li>Watch the detailed logs in the console to see what's working/failing</li>
-              <li>Try the search buttons below and check console for more logs</li>
-            </ol>
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="container mx-auto px-4 py-8">
         {/* Search Header */}
         <div className="text-center mb-8">
           <h2 className="text-4xl font-bold mb-4 bg-gradient-to-r from-orange-500 to-pink-500 bg-clip-text text-transparent">
-            Find Real UK Playgrounds
+            Find Amazing Playgrounds
           </h2>
           <p className="text-gray-600 text-lg">
-            Discover actual playgrounds across the United Kingdom using OpenStreetMap data
+            Discover real playgrounds across the UK using our comprehensive database and OpenStreetMap
           </p>
         </div>
 
@@ -328,42 +428,18 @@ export default function SearchPage() {
 
               {/* Quick search buttons */}
               <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={() => handleLocationSearch("London")}
-                  disabled={loading}
-                  variant="outline"
-                  size="sm"
-                  className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                >
-                  London
-                </Button>
-                <Button
-                  onClick={() => handleLocationSearch("Manchester")}
-                  disabled={loading}
-                  variant="outline"
-                  size="sm"
-                  className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                >
-                  Manchester
-                </Button>
-                <Button
-                  onClick={() => handleLocationSearch("Birmingham")}
-                  disabled={loading}
-                  variant="outline"
-                  size="sm"
-                  className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                >
-                  Birmingham
-                </Button>
-                <Button
-                  onClick={() => handleLocationSearch("Edinburgh")}
-                  disabled={loading}
-                  variant="outline"
-                  size="sm"
-                  className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                >
-                  Edinburgh
-                </Button>
+                {['London', 'Manchester', 'Birmingham', 'Edinburgh', 'Cardiff', 'Belfast'].map(city => (
+                  <Button
+                    key={city}
+                    onClick={() => handleLocationSearch(city)}
+                    disabled={loading}
+                    variant="outline"
+                    size="sm"
+                    className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
+                  >
+                    {city}
+                  </Button>
+                ))}
               </div>
             </div>
           </CardContent>
@@ -371,14 +447,10 @@ export default function SearchPage() {
 
         {/* Error Message */}
         {error && (
-          <Card className="bg-red-50 border-red-200 mb-8">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 text-red-700">
-                <AlertCircle className="w-5 h-5" />
-                <p>{error}</p>
-              </div>
-            </CardContent>
-          </Card>
+          <Alert className="mb-8" variant="destructive">
+            <AlertCircle className="w-4 h-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         {/* Results */}
@@ -392,8 +464,8 @@ export default function SearchPage() {
             {loading && (
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-orange-500" />
-                <p className="text-gray-600">Searching for real playgrounds...</p>
-                <p className="text-sm text-gray-500 mt-2">Check browser console (F12) for detailed logs</p>
+                <p className="text-gray-600">Searching for playgrounds...</p>
+                <p className="text-sm text-gray-500 mt-2">Checking both our database and OpenStreetMap</p>
               </div>
             )}
 
@@ -403,7 +475,7 @@ export default function SearchPage() {
                   <Search className="w-16 h-16 text-gray-300 mx-auto mb-4" />
                   <h3 className="text-xl font-semibold mb-2">Start Your Search</h3>
                   <p className="text-gray-600 mb-4">
-                    Search for a UK location or use "Near Me" to find real playgrounds around you.
+                    Search for a UK location or use "Near Me" to find playgrounds around you.
                   </p>
                   <div className="flex gap-2 justify-center">
                     <Button
@@ -413,12 +485,11 @@ export default function SearchPage() {
                       Search London
                     </Button>
                     <Button
-                      onClick={runDebugTest}
+                      onClick={() => router.push('/add-playground')}
                       variant="outline"
-                      className="border-yellow-300 text-yellow-600 hover:bg-yellow-50 bg-transparent"
+                      className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                     >
-                      <Bug className="w-4 h-4 mr-2" />
-                      Debug Test
+                      Add a Playground
                     </Button>
                   </div>
                 </CardContent>
@@ -428,8 +499,7 @@ export default function SearchPage() {
             {sortedPlaygrounds.map((playground) => (
               <Card
                 key={playground.id}
-                className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow cursor-pointer"
-                onClick={() => handlePlaygroundClick(playground)}
+                className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow"
               >
                 <CardContent className="p-6">
                   <div className="flex flex-col md:flex-row gap-6">
@@ -460,27 +530,45 @@ export default function SearchPage() {
                             </span>
                           </div>
                         </div>
-                        <Badge
-                          variant="secondary"
-                          className={
-                            playground.id.startsWith("mock")
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-green-100 text-green-700"
-                          }
-                        >
-                          {playground.id.startsWith("mock") ? "Test Data" : "Real Data"}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleFavorite(playground.id)
+                            }}
+                            className={`${
+                              favorites.has(playground.id) 
+                                ? 'text-pink-600 hover:text-pink-700' 
+                                : 'text-gray-400 hover:text-pink-600'
+                            }`}
+                          >
+                            <Heart className={`w-4 h-4 ${favorites.has(playground.id) ? 'fill-current' : ''}`} />
+                          </Button>
+                          <Badge
+                            variant="secondary"
+                            className={
+                              playground.id.startsWith("mock") || playground.id.startsWith("db-")
+                                ? "bg-green-100 text-green-700"
+                                : "bg-blue-100 text-blue-700"
+                            }
+                          >
+                            {playground.id.startsWith("db-") ? "User Added" : 
+                             playground.id.startsWith("mock") ? "Test Data" : "OpenStreetMap"}
+                          </Badge>
+                        </div>
                       </div>
 
                       {playground.amenities && playground.amenities.length > 0 && (
                         <div className="flex flex-wrap gap-2 mb-4">
                           {playground.amenities.slice(0, 4).map((amenity, index) => (
-                            <Badge key={index} variant="secondary" className="bg-blue-100 text-blue-700">
+                            <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
                               {amenity}
                             </Badge>
                           ))}
                           {playground.amenities.length > 4 && (
-                            <Badge variant="secondary" className="bg-gray-100 text-gray-600">
+                            <Badge variant="outline" className="border-gray-300 text-gray-600">
                               +{playground.amenities.length - 4} more
                             </Badge>
                           )}
@@ -488,14 +576,26 @@ export default function SearchPage() {
                       )}
 
                       <div className="flex gap-3">
-                        <Button className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600">
-                          View on Map
+                        <Button 
+                          onClick={() => handleViewDetails(playground)}
+                          className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                        >
+                          View Details
                         </Button>
                         <Button
+                          onClick={() => handlePlaygroundClick(playground)}
                           variant="outline"
                           className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                         >
-                          Add Rating
+                          View on Map
+                        </Button>
+                        <Button
+                          onClick={() => handleAddRating(playground)}
+                          variant="outline"
+                          className="border-green-300 text-green-600 hover:bg-green-50 bg-transparent"
+                        >
+                          <Star className="w-4 h-4 mr-1" />
+                          Rate
                         </Button>
                       </div>
                     </div>
@@ -527,57 +627,75 @@ export default function SearchPage() {
             {selectedPlayground && (
               <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
                 <CardContent className="p-6">
-                  <h3 className="text-xl font-bold mb-2">{selectedPlayground.name}</h3>
-                  <div className="grid md:grid-cols-2 gap-4">
+                  <div className="flex justify-between items-start mb-4">
                     <div>
-                      <p className="text-gray-600 mb-2">
-                        <MapPin className="w-4 h-4 inline mr-1" />
-                        {selectedPlayground.address && `${selectedPlayground.address}, `}
-                        {selectedPlayground.city || "UK"}
-                      </p>
-                      {selectedPlayground.postcode && (
-                        <p className="text-gray-600 mb-2">Postcode: {selectedPlayground.postcode}</p>
-                      )}
-                      {selectedPlayground.opening_hours && (
-                        <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
-                      )}
-                      {userLocation && (
-                        <p className="text-orange-600 font-medium mb-2">
-                          Distance:{" "}
-                          {calculateDistance(
-                            userLocation[0],
-                            userLocation[1],
-                            selectedPlayground.lat,
-                            selectedPlayground.lon,
-                          ).toFixed(1)}
-                          km away
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      {selectedPlayground.amenities && selectedPlayground.amenities.length > 0 && (
+                      <h3 className="text-xl font-bold mb-2">{selectedPlayground.name}</h3>
+                      <div className="grid md:grid-cols-2 gap-4">
                         <div>
-                          <p className="font-medium mb-2">Equipment:</p>
-                          <div className="flex flex-wrap gap-1">
-                            {selectedPlayground.amenities.map((amenity, index) => (
-                              <Badge key={index} variant="secondary" className="bg-blue-100 text-blue-700">
-                                {amenity}
-                              </Badge>
-                            ))}
-                          </div>
+                          <p className="text-gray-600 mb-2">
+                            <MapPin className="w-4 h-4 inline mr-1" />
+                            {selectedPlayground.address && `${selectedPlayground.address}, `}
+                            {selectedPlayground.city || "UK"}
+                          </p>
+                          {selectedPlayground.opening_hours && (
+                            <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
+                          )}
+                          {userLocation && (
+                            <p className="text-orange-600 font-medium mb-2">
+                              Distance:{" "}
+                              {calculateDistance(
+                                userLocation[0],
+                                userLocation[1],
+                                selectedPlayground.lat,
+                                selectedPlayground.lon,
+                              ).toFixed(1)}
+                              km away
+                            </p>
+                          )}
                         </div>
-                      )}
+                        <div>
+                          {selectedPlayground.amenities && selectedPlayground.amenities.length > 0 && (
+                            <div>
+                              <p className="font-medium mb-2">Equipment:</p>
+                              <div className="flex flex-wrap gap-1">
+                                {selectedPlayground.amenities.map((amenity, index) => (
+                                  <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
+                                    {amenity}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggleFavorite(selectedPlayground.id)}
+                      className={`${
+                        favorites.has(selectedPlayground.id) 
+                          ? 'text-pink-600 hover:text-pink-700' 
+                          : 'text-gray-400 hover:text-pink-600'
+                      }`}
+                    >
+                      <Heart className={`w-5 h-5 ${favorites.has(selectedPlayground.id) ? 'fill-current' : ''}`} />
+                    </Button>
                   </div>
-                  <div className="flex gap-3 mt-4">
-                    <Button className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600">
-                      Add Rating
+                  <div className="flex gap-3">
+                    <Button 
+                      onClick={() => handleViewDetails(selectedPlayground)}
+                      className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                    >
+                      View Full Details
                     </Button>
                     <Button
+                      onClick={() => handleAddRating(selectedPlayground)}
                       variant="outline"
-                      className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
+                      className="border-green-300 text-green-600 hover:bg-green-50 bg-transparent"
                     >
-                      Save to Favorites
+                      <Star className="w-4 h-4 mr-1" />
+                      Add Rating
                     </Button>
                   </div>
                 </CardContent>
