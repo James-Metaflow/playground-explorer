@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Search, MapPin, Loader2, Navigation, AlertCircle } from "lucide-react"
+import { Search, MapPin, Loader2, Navigation, AlertCircle, Bug } from "lucide-react"
 import Link from "next/link"
 import AuthButton from "@/components/auth-button"
 import SimpleMap from "@/components/simple-map"
@@ -26,46 +26,90 @@ export default function SearchPage() {
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
   const [mapCenter, setMapCenter] = useState<[number, number]>([51.5074, -0.1278]) // Default to London
   const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
+  const [debugMode, setDebugMode] = useState(false)
+
+  // Test function for debugging
+  const runDebugTest = async () => {
+    console.log("🐛 Running debug test...")
+    setDebugMode(true)
+
+    try {
+      // Test 1: Basic API connectivity
+      console.log("Test 1: Testing basic connectivity...")
+      const testResponse = await fetch("https://httpbin.org/get")
+      console.log("✅ Basic connectivity works:", testResponse.ok)
+
+      // Test 2: Test geocoding
+      console.log("Test 2: Testing geocoding...")
+      const geocodeTest = await fetch(
+        "https://nominatim.openstreetmap.org/search?format=json&q=London&countrycodes=gb&limit=1",
+      )
+      const geocodeData = await geocodeTest.json()
+      console.log("✅ Geocoding test:", geocodeData)
+
+      // Test 3: Test playground search
+      console.log("Test 3: Testing playground search...")
+      const playgroundResults = await searchPlaygroundsByLocation("London")
+      console.log("✅ Playground search test:", playgroundResults)
+
+      setPlaygrounds(playgroundResults)
+      if (playgroundResults.length > 0) {
+        setMapCenter([playgroundResults[0].lat, playgroundResults[0].lon])
+      }
+    } catch (error) {
+      console.error("❌ Debug test failed:", error)
+      setError(`Debug test failed: ${error}`)
+    }
+
+    setDebugMode(false)
+  }
 
   // Get user's location on component mount
   useEffect(() => {
+    console.log("🚀 SearchPage component mounted")
+
     getCurrentLocation()
       .then(({ lat, lon }) => {
-        console.log("Got user location:", lat, lon)
+        console.log("✅ Got user location:", lat, lon)
         setUserLocation([lat, lon])
         setMapCenter([lat, lon])
         // Automatically search for nearby playgrounds
         handleNearbySearch(lat, lon)
       })
       .catch((error) => {
-        console.log("Could not get user location:", error)
+        console.log("⚠️ Could not get user location:", error)
         // Default to London and search there
+        console.log("🔄 Falling back to London search...")
         handleLocationSearch("London, UK")
       })
   }, [])
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) return
+    if (!searchQuery.trim()) {
+      console.log("❌ Empty search query")
+      return
+    }
 
+    console.log(`🔍 Starting search for: "${searchQuery}"`)
     setLoading(true)
     setError(null)
 
     try {
-      console.log("Searching for:", searchQuery)
       const results = await searchPlaygroundsByLocation(searchQuery)
-      console.log("Search results:", results)
+      console.log("✅ Search completed, results:", results)
 
       setPlaygrounds(results)
 
       if (results.length > 0) {
         // Center map on first result
         setMapCenter([results[0].lat, results[0].lon])
+        console.log("📍 Map centered on:", results[0].lat, results[0].lon)
       } else {
         setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
       }
     } catch (error) {
-      console.error("Search failed:", error)
-      setError("Search failed. Please try again.")
+      console.error("❌ Search failed:", error)
+      setError(`Search failed: ${error}`)
     } finally {
       setLoading(false)
     }
@@ -76,17 +120,18 @@ export default function SearchPage() {
     const searchLon = lon || userLocation?.[1]
 
     if (!searchLat || !searchLon) {
+      console.log("❌ No location available for nearby search")
       setError("Location not available. Please search by city or postcode.")
       return
     }
 
+    console.log(`🔍 Starting nearby search at: ${searchLat}, ${searchLon}`)
     setLoading(true)
     setError(null)
 
     try {
-      console.log("Searching near:", searchLat, searchLon)
       const results = await fetchPlaygroundsNearLocation(searchLat, searchLon, 10)
-      console.log("Nearby results:", results)
+      console.log("✅ Nearby search completed, results:", results)
 
       setPlaygrounds(results)
 
@@ -94,39 +139,40 @@ export default function SearchPage() {
         setError("No playgrounds found nearby. Try expanding your search area.")
       }
     } catch (error) {
-      console.error("Nearby search failed:", error)
-      setError("Failed to find nearby playgrounds. Please try again.")
+      console.error("❌ Nearby search failed:", error)
+      setError(`Failed to find nearby playgrounds: ${error}`)
     } finally {
       setLoading(false)
     }
   }
 
   const handleLocationSearch = async (location: string) => {
+    console.log(`🔍 Starting location search for: "${location}"`)
     setLoading(true)
     setError(null)
 
     try {
-      console.log("Searching location:", location)
       const results = await searchPlaygroundsByLocation(location)
-      console.log("Location results:", results)
+      console.log("✅ Location search completed, results:", results)
 
       setPlaygrounds(results)
 
       if (results.length > 0) {
         setMapCenter([results[0].lat, results[0].lon])
+        console.log("📍 Map centered on:", results[0].lat, results[0].lon)
       } else {
         setError(`No playgrounds found in ${location}.`)
       }
     } catch (error) {
-      console.error("Location search failed:", error)
-      setError("Location search failed. Please try again.")
+      console.error("❌ Location search failed:", error)
+      setError(`Location search failed: ${error}`)
     } finally {
       setLoading(false)
     }
   }
 
   const handlePlaygroundClick = (playground: PlaygroundData) => {
-    console.log("Playground clicked:", playground)
+    console.log("🏰 Playground clicked:", playground)
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
   }
@@ -179,6 +225,30 @@ export default function SearchPage() {
             Discover actual playgrounds across the United Kingdom using OpenStreetMap data
           </p>
         </div>
+
+        {/* Debug Panel */}
+        <Card className="bg-yellow-50 border-yellow-200 mb-8">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bug className="w-5 h-5 text-yellow-600" />
+                <span className="font-medium text-yellow-800">Debug Mode</span>
+              </div>
+              <Button
+                onClick={runDebugTest}
+                disabled={debugMode}
+                size="sm"
+                variant="outline"
+                className="border-yellow-300 text-yellow-700 hover:bg-yellow-100 bg-transparent"
+              >
+                {debugMode ? <Loader2 className="w-4 h-4 animate-spin" /> : "Run Debug Test"}
+              </Button>
+            </div>
+            <p className="text-yellow-700 text-sm mt-2">
+              Click "Run Debug Test" to test API connectivity and see detailed logs in the browser console (F12).
+            </p>
+          </CardContent>
+        </Card>
 
         {/* Search Controls */}
         <Card className="bg-white/80 backdrop-blur-sm border-orange-200 mb-8">
@@ -283,6 +353,7 @@ export default function SearchPage() {
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-orange-500" />
                 <p className="text-gray-600">Searching for real playgrounds...</p>
+                <p className="text-sm text-gray-500 mt-2">Check browser console (F12) for detailed logs</p>
               </div>
             )}
 
@@ -294,12 +365,22 @@ export default function SearchPage() {
                   <p className="text-gray-600 mb-4">
                     Search for a UK location or use "Near Me" to find real playgrounds around you.
                   </p>
-                  <Button
-                    onClick={() => handleLocationSearch("London")}
-                    className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
-                  >
-                    Search London
-                  </Button>
+                  <div className="flex gap-2 justify-center">
+                    <Button
+                      onClick={() => handleLocationSearch("London")}
+                      className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                    >
+                      Search London
+                    </Button>
+                    <Button
+                      onClick={runDebugTest}
+                      variant="outline"
+                      className="border-yellow-300 text-yellow-600 hover:bg-yellow-50 bg-transparent"
+                    >
+                      <Bug className="w-4 h-4 mr-2" />
+                      Debug Test
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -339,8 +420,15 @@ export default function SearchPage() {
                             </span>
                           </div>
                         </div>
-                        <Badge variant="secondary" className="bg-green-100 text-green-700">
-                          Real Data
+                        <Badge
+                          variant="secondary"
+                          className={
+                            playground.id.startsWith("mock")
+                              ? "bg-yellow-100 text-yellow-700"
+                              : "bg-green-100 text-green-700"
+                          }
+                        >
+                          {playground.id.startsWith("mock") ? "Test Data" : "Real Data"}
                         </Badge>
                       </div>
 
@@ -461,5 +549,6 @@ export default function SearchPage() {
     </div>
   )
 }
+
 
 
