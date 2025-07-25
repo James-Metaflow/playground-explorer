@@ -50,6 +50,7 @@ export default function SearchPage() {
   const [mapCenter, setMapCenter] = useState<[number, number]>([51.5074, -0.1278]) // Default to London
   const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
+  const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null) // NEW: Track search center for distance sorting
 
   // Auth state management
   useEffect(() => {
@@ -158,6 +159,7 @@ export default function SearchPage() {
     }
   }
 
+  // Enhanced search with proper distance sorting
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
       console.log("❌ Empty search query")
@@ -169,6 +171,29 @@ export default function SearchPage() {
     setError(null)
 
     try {
+      // First geocode the search query to get the center point
+      let searchLat: number | null = null
+      let searchLon: number | null = null
+
+      try {
+        const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=gb&limit=1`
+        const geocodeResponse = await fetch(geocodeUrl, {
+          headers: { "User-Agent": "PlaygroundExplorer/1.0" }
+        })
+
+        if (geocodeResponse.ok) {
+          const geocodeData = await geocodeResponse.json()
+          if (geocodeData && geocodeData.length > 0) {
+            searchLat = parseFloat(geocodeData[0].lat)
+            searchLon = parseFloat(geocodeData[0].lon)
+            setSearchCenter([searchLat, searchLon]) // Store search center for distance calculations
+            console.log(`📍 Search center: ${searchLat}, ${searchLon}`)
+          }
+        }
+      } catch (geocodeError) {
+        console.warn('Geocoding failed:', geocodeError)
+      }
+
       // Search both external API and database
       const [externalResults, dbResults] = await Promise.all([
         searchPlaygroundsByLocation(searchQuery),
@@ -180,12 +205,29 @@ export default function SearchPage() {
 
       // Combine and deduplicate results
       const combinedResults = [...externalResults, ...dbResults]
-      setPlaygrounds(combinedResults)
+      
+      // Sort by distance from search center if we have coordinates
+      let sortedResults = combinedResults
+      if (searchLat && searchLon) {
+        sortedResults = combinedResults.sort((a, b) => {
+          const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
+          const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
+          return distA - distB
+        })
+        console.log(`📏 Sorted ${sortedResults.length} results by distance from search location`)
+      }
 
-      if (combinedResults.length > 0) {
-        // Center map on first result
-        setMapCenter([combinedResults[0].lat, combinedResults[0].lon])
-        console.log("📍 Map centered on:", combinedResults[0].lat, combinedResults[0].lon)
+      setPlaygrounds(sortedResults)
+
+      if (sortedResults.length > 0) {
+        // Center map on search location if available, otherwise first result
+        if (searchLat && searchLon) {
+          setMapCenter([searchLat, searchLon])
+          console.log("📍 Map centered on search location:", searchLat, searchLon)
+        } else {
+          setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
+          console.log("📍 Map centered on first result:", sortedResults[0].lat, sortedResults[0].lon)
+        }
       } else {
         setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
       }
@@ -216,7 +258,8 @@ export default function SearchPage() {
         amenities: pg.equipment || [],
         surface: 'unknown',
         access: pg.accessibility,
-        opening_hours: pg.opening_hours
+        opening_hours: pg.opening_hours,
+        source: 'database' as const
       }))
     } catch (error) {
       console.error('Database search error:', error)
@@ -224,8 +267,8 @@ export default function SearchPage() {
     }
   }
 
+  // Enhanced nearby search with proper distance sorting
   const handleNearbySearch = async () => {
-    // First get user location if we don't have it
     let searchLat = userLocation?.[0]
     let searchLon = userLocation?.[1]
 
@@ -238,6 +281,7 @@ export default function SearchPage() {
         searchLat = location.lat
         searchLon = location.lon
         setUserLocation([searchLat, searchLon])
+        setSearchCenter([searchLat, searchLon]) // Set search center to user location
         setMapCenter([searchLat, searchLon])
         console.log("✅ Got user location:", searchLat, searchLon)
       } catch (error) {
@@ -248,6 +292,8 @@ export default function SearchPage() {
       } finally {
         setLocationLoading(false)
       }
+    } else {
+      setSearchCenter([searchLat, searchLon]) // Set search center to user location
     }
 
     console.log(`🔍 Starting nearby search at: ${searchLat}, ${searchLon}`)
@@ -263,9 +309,17 @@ export default function SearchPage() {
       console.log("✅ Nearby search completed - External:", externalResults.length, "Database:", dbResults.length)
 
       const combinedResults = [...externalResults, ...dbResults]
-      setPlaygrounds(combinedResults)
+      
+      // Sort by distance from user location
+      const sortedResults = combinedResults.sort((a, b) => {
+        const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
+        const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
+        return distA - distB
+      })
 
-      if (combinedResults.length === 0) {
+      setPlaygrounds(sortedResults)
+
+      if (sortedResults.length === 0) {
         setError("No playgrounds found nearby. Try expanding your search area or search by city name.")
       }
     } catch (error) {
@@ -289,7 +343,8 @@ export default function SearchPage() {
       amenities: pg.equipment || [],
       surface: 'unknown',
       access: pg.accessibility,
-      opening_hours: pg.opening_hours
+      opening_hours: pg.opening_hours,
+      source: 'database' as const
     }))
   }
 
@@ -300,6 +355,29 @@ export default function SearchPage() {
     setSearchQuery(location) // Update search input
 
     try {
+      // Geocode the location first
+      let searchLat: number | null = null
+      let searchLon: number | null = null
+
+      try {
+        const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}&countrycodes=gb&limit=1`
+        const geocodeResponse = await fetch(geocodeUrl, {
+          headers: { "User-Agent": "PlaygroundExplorer/1.0" }
+        })
+
+        if (geocodeResponse.ok) {
+          const geocodeData = await geocodeResponse.json()
+          if (geocodeData && geocodeData.length > 0) {
+            searchLat = parseFloat(geocodeData[0].lat)
+            searchLon = parseFloat(geocodeData[0].lon)
+            setSearchCenter([searchLat, searchLon])
+            console.log(`📍 Search center for ${location}: ${searchLat}, ${searchLon}`)
+          }
+        }
+      } catch (geocodeError) {
+        console.warn('Geocoding failed:', geocodeError)
+      }
+
       const [externalResults, dbResults] = await Promise.all([
         searchPlaygroundsByLocation(location),
         searchDatabasePlaygrounds(location)
@@ -308,11 +386,26 @@ export default function SearchPage() {
       console.log("✅ Location search completed - External:", externalResults.length, "Database:", dbResults.length)
 
       const combinedResults = [...externalResults, ...dbResults]
-      setPlaygrounds(combinedResults)
+      
+      // Sort by distance from search location if we have coordinates
+      let sortedResults = combinedResults
+      if (searchLat && searchLon) {
+        sortedResults = combinedResults.sort((a, b) => {
+          const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
+          const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
+          return distA - distB
+        })
+      }
 
-      if (combinedResults.length > 0) {
-        setMapCenter([combinedResults[0].lat, combinedResults[0].lon])
-        console.log("📍 Map centered on:", combinedResults[0].lat, combinedResults[0].lon)
+      setPlaygrounds(sortedResults)
+
+      if (sortedResults.length > 0) {
+        if (searchLat && searchLon) {
+          setMapCenter([searchLat, searchLon])
+        } else {
+          setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
+        }
+        console.log("📍 Map centered")
       } else {
         setError(`No playgrounds found in ${location}.`)
       }
@@ -324,14 +417,41 @@ export default function SearchPage() {
     }
   }
 
+  // FIXED: View on Map function
   const handlePlaygroundClick = (playground: PlaygroundData) => {
     console.log("🏰 Playground clicked:", playground)
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
+    
+    // Switch to map view automatically
+    const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
+    if (mapTab) {
+      mapTab.click()
+    }
   }
 
+  // FIXED: View Details function with proper ID handling
   const handleViewDetails = (playground: PlaygroundData) => {
-    router.push(`/playground/${playground.id}`)
+    console.log("🔍 View details for:", playground)
+    
+    // Handle different ID formats
+    let playgroundId = playground.id
+    
+    // Remove prefixes for routing
+    if (playgroundId.startsWith('google-')) {
+      playgroundId = playgroundId.replace('google-', '')
+    } else if (playgroundId.startsWith('db-')) {
+      playgroundId = playgroundId.replace('db-', '')
+    } else if (playgroundId.startsWith('osm-')) {
+      playgroundId = playgroundId.replace('osm-', '')
+    } else if (playgroundId.startsWith('mock-')) {
+      // For mock data, create a special route or show a message
+      alert('This is test data. Real playground details page would show here.')
+      return
+    }
+    
+    console.log("🔍 Navigating to playground ID:", playgroundId)
+    router.push(`/playground/${playgroundId}`)
   }
 
   const handleAddRating = (playground: PlaygroundData) => {
@@ -339,14 +459,36 @@ export default function SearchPage() {
       router.push('/auth/signin')
       return
     }
-    router.push(`/playground/${playground.id}?tab=rating`)
+    
+    // Handle ID the same way as view details
+    let playgroundId = playground.id
+    if (playgroundId.startsWith('google-')) {
+      playgroundId = playgroundId.replace('google-', '')
+    } else if (playgroundId.startsWith('db-')) {
+      playgroundId = playgroundId.replace('db-', '')
+    } else if (playgroundId.startsWith('osm-')) {
+      playgroundId = playgroundId.replace('osm-', '')
+    } else if (playgroundId.startsWith('mock-')) {
+      alert('This is test data. Real rating page would show here.')
+      return
+    }
+    
+    router.push(`/playground/${playgroundId}?tab=rating`)
   }
 
-  // Sort playgrounds by distance if user location is available
+  // Calculate distance from search center (improved sorting display)
+  const getDistanceFromSearchCenter = (playground: PlaygroundData): number | null => {
+    if (!searchCenter) return null
+    return calculateDistance(searchCenter[0], searchCenter[1], playground.lat, playground.lon)
+  }
+
+  // Sort playgrounds by distance from search center or user location
   const sortedPlaygrounds = [...playgrounds].sort((a, b) => {
-    if (!userLocation) return 0
-    const distA = calculateDistance(userLocation[0], userLocation[1], a.lat, a.lon)
-    const distB = calculateDistance(userLocation[0], userLocation[1], b.lat, b.lon)
+    const referencePoint = searchCenter || userLocation
+    if (!referencePoint) return 0
+    
+    const distA = calculateDistance(referencePoint[0], referencePoint[1], a.lat, a.lon)
+    const distB = calculateDistance(referencePoint[0], referencePoint[1], b.lat, b.lon)
     return distA - distB
   })
 
@@ -389,7 +531,7 @@ export default function SearchPage() {
             Find Amazing Playgrounds
           </h2>
           <p className="text-gray-600 text-lg">
-            Discover real playgrounds across the UK using our comprehensive database and OpenStreetMap
+            Discover real playgrounds across the UK using our comprehensive database and Google Places
           </p>
         </div>
 
@@ -463,8 +605,8 @@ export default function SearchPage() {
         {/* Results */}
         <Tabs defaultValue="list" className="space-y-6">
           <TabsList className="grid w-full grid-cols-2 bg-white/80 border border-orange-200">
-            <TabsTrigger value="list">List View ({playgrounds.length})</TabsTrigger>
-            <TabsTrigger value="map">Map View</TabsTrigger>
+            <TabsTrigger value="list" data-value="list">List View ({playgrounds.length})</TabsTrigger>
+            <TabsTrigger value="map" data-value="map">Map View</TabsTrigger>
           </TabsList>
 
           <TabsContent value="list" className="space-y-4">
@@ -472,7 +614,7 @@ export default function SearchPage() {
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-orange-500" />
                 <p className="text-gray-600">Searching for playgrounds...</p>
-                <p className="text-sm text-gray-500 mt-2">Checking both our database and OpenStreetMap</p>
+                <p className="text-sm text-gray-500 mt-2">Checking Google Places and our database</p>
               </div>
             )}
 
@@ -503,113 +645,129 @@ export default function SearchPage() {
               </Card>
             )}
 
-            {sortedPlaygrounds.map((playground) => (
-              <Card
-                key={playground.id}
-                className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow"
-              >
-                <CardContent className="p-6">
-                  <div className="flex flex-col md:flex-row gap-6">
-                    <div className="md:w-48 h-32 bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center">
-                      <span className="text-4xl">🏰</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <h3 className="text-xl font-bold text-gray-800 mb-1">{playground.name}</h3>
-                          <div className="flex items-center text-gray-600 mb-2">
-                            <MapPin className="w-4 h-4 mr-1" />
-                            <span className="text-sm">
-                              {playground.address && `${playground.address}, `}
-                              {playground.city || "UK"}
-                              {userLocation && (
-                                <span className="ml-2 text-orange-600 font-medium">
-                                  •{" "}
-                                  {calculateDistance(
-                                    userLocation[0],
-                                    userLocation[1],
-                                    playground.lat,
-                                    playground.lon,
-                                  ).toFixed(1)}
-                                  km away
-                                </span>
-                              )}
-                            </span>
+            {sortedPlaygrounds.map((playground) => {
+              const distanceFromSearch = getDistanceFromSearchCenter(playground)
+              const distanceFromUser = userLocation 
+                ? calculateDistance(userLocation[0], userLocation[1], playground.lat, playground.lon)
+                : null
+
+              return (
+                <Card
+                  key={playground.id}
+                  className="bg-white/80 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow"
+                >
+                  <CardContent className="p-6">
+                    <div className="flex flex-col md:flex-row gap-6">
+                      <div className="md:w-48 h-32 bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center">
+                        <span className="text-4xl">🏰</span>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <h3 className="text-xl font-bold text-gray-800 mb-1">{playground.name}</h3>
+                            <div className="flex items-center text-gray-600 mb-2">
+                              <MapPin className="w-4 h-4 mr-1" />
+                              <span className="text-sm">
+                                {playground.address && `${playground.address}, `}
+                                {playground.city || "UK"}
+                                {/* Show distance based on what's available */}
+                                {distanceFromSearch && (
+                                  <span className="ml-2 text-orange-600 font-medium">
+                                    • {distanceFromSearch.toFixed(1)}km from search
+                                  </span>
+                                )}
+                                {!distanceFromSearch && distanceFromUser && (
+                                  <span className="ml-2 text-blue-600 font-medium">
+                                    • {distanceFromUser.toFixed(1)}km from you
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleFavorite(playground.id)
+                              }}
+                              className={`${
+                                favorites.has(playground.id) 
+                                  ? 'text-pink-600 hover:text-pink-700' 
+                                  : 'text-gray-400 hover:text-pink-600'
+                              }`}
+                            >
+                              <Heart className={`w-4 h-4 ${favorites.has(playground.id) ? 'fill-current' : ''}`} />
+                            </Button>
+                            <Badge
+                              variant="secondary"
+                              className={
+                                playground.source === 'google'
+                                  ? "bg-blue-100 text-blue-700"
+                                  : playground.source === 'database'
+                                  ? "bg-green-100 text-green-700"
+                                  : playground.source === 'osm'
+                                  ? "bg-purple-100 text-purple-700"
+                                  : "bg-gray-100 text-gray-700"
+                              }
+                            >
+                              {playground.source === 'google' ? 'Google Places' :
+                               playground.source === 'database' ? 'User Added' :
+                               playground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
+                            </Badge>
+                            {playground.rating && (
+                              <Badge variant="outline" className="border-yellow-300 text-yellow-700">
+                                ⭐ {playground.rating.toFixed(1)}
+                              </Badge>
+                            )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleFavorite(playground.id)
-                            }}
-                            className={`${
-                              favorites.has(playground.id) 
-                                ? 'text-pink-600 hover:text-pink-700' 
-                                : 'text-gray-400 hover:text-pink-600'
-                            }`}
+
+                        {playground.amenities && playground.amenities.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mb-4">
+                            {playground.amenities.slice(0, 4).map((amenity, index) => (
+                              <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
+                                {amenity}
+                              </Badge>
+                            ))}
+                            {playground.amenities.length > 4 && (
+                              <Badge variant="outline" className="border-gray-300 text-gray-600">
+                                +{playground.amenities.length - 4} more
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex gap-3">
+                          <Button 
+                            onClick={() => handleViewDetails(playground)}
+                            className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
                           >
-                            <Heart className={`w-4 h-4 ${favorites.has(playground.id) ? 'fill-current' : ''}`} />
+                            View Details
                           </Button>
-                          <Badge
-                            variant="secondary"
-                            className={
-                              playground.id.startsWith("mock") || playground.id.startsWith("db-")
-                                ? "bg-green-100 text-green-700"
-                                : "bg-blue-100 text-blue-700"
-                            }
+                          <Button
+                            onClick={() => handlePlaygroundClick(playground)}
+                            variant="outline"
+                            className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                           >
-                            {playground.id.startsWith("db-") ? "User Added" : 
-                             playground.id.startsWith("mock") ? "Test Data" : "OpenStreetMap"}
-                          </Badge>
+                            View on Map
+                          </Button>
+                          <Button
+                            onClick={() => handleAddRating(playground)}
+                            variant="outline"
+                            className="border-green-300 text-green-600 hover:bg-green-50 bg-transparent"
+                          >
+                            <Star className="w-4 h-4 mr-1" />
+                            Rate
+                          </Button>
                         </div>
-                      </div>
-
-                      {playground.amenities && playground.amenities.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mb-4">
-                          {playground.amenities.slice(0, 4).map((amenity, index) => (
-                            <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
-                              {amenity}
-                            </Badge>
-                          ))}
-                          {playground.amenities.length > 4 && (
-                            <Badge variant="outline" className="border-gray-300 text-gray-600">
-                              +{playground.amenities.length - 4} more
-                            </Badge>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="flex gap-3">
-                        <Button 
-                          onClick={() => handleViewDetails(playground)}
-                          className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
-                        >
-                          View Details
-                        </Button>
-                        <Button
-                          onClick={() => handlePlaygroundClick(playground)}
-                          variant="outline"
-                          className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-                        >
-                          View on Map
-                        </Button>
-                        <Button
-                          onClick={() => handleAddRating(playground)}
-                          variant="outline"
-                          className="border-green-300 text-green-600 hover:bg-green-50 bg-transparent"
-                        >
-                          <Star className="w-4 h-4 mr-1" />
-                          Rate
-                        </Button>
                       </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              )
+            })}
           </TabsContent>
 
           <TabsContent value="map" className="space-y-4">
@@ -618,6 +776,11 @@ export default function SearchPage() {
                 <div className="mb-4">
                   <h3 className="text-lg font-semibold mb-2">
                     {playgrounds.length} playground{playgrounds.length !== 1 ? "s" : ""} found
+                    {searchCenter && (
+                      <span className="text-sm font-normal text-gray-600 ml-2">
+                        (sorted by distance from search location)
+                      </span>
+                    )}
                   </h3>
                   <p className="text-gray-600 text-sm">Click on playground markers to see details</p>
                 </div>
@@ -647,23 +810,33 @@ export default function SearchPage() {
                           {selectedPlayground.opening_hours && (
                             <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
                           )}
-                          {userLocation && (
+                          {selectedPlayground.rating && (
+                            <p className="text-yellow-600 font-medium mb-2">
+                              ⭐ Rating: {selectedPlayground.rating.toFixed(1)} / 5.0
+                            </p>
+                          )}
+                          {/* Show distance info */}
+                          {searchCenter && (
                             <p className="text-orange-600 font-medium mb-2">
-                              Distance:{" "}
-                              {calculateDistance(
-                                userLocation[0],
-                                userLocation[1],
-                                selectedPlayground.lat,
-                                selectedPlayground.lon,
-                              ).toFixed(1)}
-                              km away
+                              Distance from search: {calculateDistance(
+                                searchCenter[0], searchCenter[1],
+                                selectedPlayground.lat, selectedPlayground.lon
+                              ).toFixed(1)}km
+                            </p>
+                          )}
+                          {userLocation && (
+                            <p className="text-blue-600 font-medium mb-2">
+                              Distance from you: {calculateDistance(
+                                userLocation[0], userLocation[1],
+                                selectedPlayground.lat, selectedPlayground.lon
+                              ).toFixed(1)}km
                             </p>
                           )}
                         </div>
                         <div>
                           {selectedPlayground.amenities && selectedPlayground.amenities.length > 0 && (
                             <div>
-                              <p className="font-medium mb-2">Equipment:</p>
+                              <p className="font-medium mb-2">Equipment & Features:</p>
                               <div className="flex flex-wrap gap-1">
                                 {selectedPlayground.amenities.map((amenity, index) => (
                                   <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
@@ -673,6 +846,24 @@ export default function SearchPage() {
                               </div>
                             </div>
                           )}
+                          <div className="mt-3">
+                            <Badge
+                              variant="secondary"
+                              className={
+                                selectedPlayground.source === 'google'
+                                  ? "bg-blue-100 text-blue-700"
+                                  : selectedPlayground.source === 'database'
+                                  ? "bg-green-100 text-green-700"
+                                  : selectedPlayground.source === 'osm'
+                                  ? "bg-purple-100 text-purple-700"
+                                  : "bg-gray-100 text-gray-700"
+                              }
+                            >
+                              Source: {selectedPlayground.source === 'google' ? 'Google Places' :
+                                      selectedPlayground.source === 'database' ? 'User Added' :
+                                      selectedPlayground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
+                            </Badge>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -714,8 +905,3 @@ export default function SearchPage() {
     </div>
   )
 }
-
-
-
-
-
