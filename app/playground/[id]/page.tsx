@@ -878,22 +878,6 @@ export default function PlaygroundDetailPage() {
               </Card>
             </div>
           </TabsContent>
-        </Tabs>
-
-        {/* Back to Search Button */}
-        <div className="mt-8 text-center">
-          <Button 
-            onClick={() => router.push('/search')}
-            variant="outline"
-            className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
-          >
-            ← Back to Search Results
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}>
 
           <TabsContent value="ratings" className="space-y-6">
             <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
@@ -949,6 +933,17 @@ export default function PlaygroundDetailPage() {
             </div>
           </TabsContent>
         </Tabs>
+
+        {/* Back to Search Button */}
+        <div className="mt-8 text-center">
+          <Button 
+            onClick={() => router.push('/search')}
+            variant="outline"
+            className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
+          >
+            ← Back to Search Results
+          </Button>
+        </div>
       </div>
     </div>
   )
