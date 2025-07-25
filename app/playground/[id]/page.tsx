@@ -947,4 +947,9 @@ export default function PlaygroundDetailPage() {
                 </Card>
               ))}
             </div>
-          </TabsContent
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  )
+}
