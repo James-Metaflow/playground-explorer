@@ -77,7 +77,6 @@ export default function SearchPage() {
 
   // Load database playgrounds on mount (but don't search automatically)
   useEffect(() => {
-    console.log("🚀 SearchPage component mounted")
     loadDatabasePlaygrounds()
   }, [])
 
@@ -94,7 +93,6 @@ export default function SearchPage() {
       }
 
       setDbPlaygrounds(data || [])
-      console.log('✅ Loaded database playgrounds:', data?.length || 0)
     } catch (error) {
       console.error('Error loading database playgrounds:', error)
     }
@@ -161,12 +159,8 @@ export default function SearchPage() {
 
   // Enhanced search with proper distance sorting
   const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      console.log("❌ Empty search query")
-      return
-    }
+    if (!searchQuery.trim()) return
 
-    console.log(`🔍 Starting search for: "${searchQuery}"`)
     setLoading(true)
     setError(null)
 
@@ -186,8 +180,7 @@ export default function SearchPage() {
           if (geocodeData && geocodeData.length > 0) {
             searchLat = parseFloat(geocodeData[0].lat)
             searchLon = parseFloat(geocodeData[0].lon)
-            setSearchCenter([searchLat, searchLon]) // Store search center for distance calculations
-            console.log(`📍 Search center: ${searchLat}, ${searchLon}`)
+            setSearchCenter([searchLat, searchLon])
           }
         }
       } catch (geocodeError) {
@@ -200,9 +193,6 @@ export default function SearchPage() {
         searchDatabasePlaygrounds(searchQuery)
       ])
 
-      console.log("✅ External search completed:", externalResults.length, "results")
-      console.log("✅ Database search completed:", dbResults.length, "results")
-
       // Combine and deduplicate results
       const combinedResults = [...externalResults, ...dbResults]
       
@@ -214,25 +204,20 @@ export default function SearchPage() {
           const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
           return distA - distB
         })
-        console.log(`📏 Sorted ${sortedResults.length} results by distance from search location`)
       }
 
       setPlaygrounds(sortedResults)
 
       if (sortedResults.length > 0) {
-        // Center map on search location if available, otherwise first result
         if (searchLat && searchLon) {
           setMapCenter([searchLat, searchLon])
-          console.log("📍 Map centered on search location:", searchLat, searchLon)
         } else {
           setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
-          console.log("📍 Map centered on first result:", sortedResults[0].lat, sortedResults[0].lon)
         }
       } else {
         setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
       }
     } catch (error) {
-      console.error("❌ Search failed:", error)
       setError(`Search failed: ${error}`)
     } finally {
       setLoading(false)
@@ -248,6 +233,7 @@ export default function SearchPage() {
 
       if (error) throw error
 
+      // TODO: Fetch Playground Explorer rating for each playground here if not already included
       return (data || []).map(pg => ({
         id: `db-${pg.id}`,
         name: pg.name,
@@ -259,7 +245,9 @@ export default function SearchPage() {
         surface: 'unknown',
         access: pg.accessibility,
         opening_hours: pg.opening_hours,
-        source: 'database' as const
+        source: 'database' as const,
+        explorerRating: pg.explorerRating, // Add this if you fetch it
+        googleRating: pg.googleRating,     // Add this if you fetch it
       }))
     } catch (error) {
       console.error('Database search error:', error)
@@ -273,19 +261,15 @@ export default function SearchPage() {
     let searchLon = userLocation?.[1]
 
     if (!searchLat || !searchLon) {
-      console.log("🔍 Getting user location for nearby search...")
       setLocationLoading(true)
-      
       try {
         const location = await getCurrentLocation()
         searchLat = location.lat
         searchLon = location.lon
         setUserLocation([searchLat, searchLon])
-        setSearchCenter([searchLat, searchLon]) // Set search center to user location
+        setSearchCenter([searchLat, searchLon])
         setMapCenter([searchLat, searchLon])
-        console.log("✅ Got user location:", searchLat, searchLon)
       } catch (error) {
-        console.log("❌ Could not get user location:", error)
         setError("Could not access your location. Please search by city or postcode instead.")
         setLocationLoading(false)
         return
@@ -293,10 +277,9 @@ export default function SearchPage() {
         setLocationLoading(false)
       }
     } else {
-      setSearchCenter([searchLat, searchLon]) // Set search center to user location
+      setSearchCenter([searchLat, searchLon])
     }
 
-    console.log(`🔍 Starting nearby search at: ${searchLat}, ${searchLon}`)
     setLoading(true)
     setError(null)
 
@@ -306,11 +289,7 @@ export default function SearchPage() {
         getNearbyDatabasePlaygrounds(searchLat, searchLon)
       ])
 
-      console.log("✅ Nearby search completed - External:", externalResults.length, "Database:", dbResults.length)
-
       const combinedResults = [...externalResults, ...dbResults]
-      
-      // Sort by distance from user location
       const sortedResults = combinedResults.sort((a, b) => {
         const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
         const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
@@ -323,7 +302,6 @@ export default function SearchPage() {
         setError("No playgrounds found nearby. Try expanding your search area or search by city name.")
       }
     } catch (error) {
-      console.error("❌ Nearby search failed:", error)
       setError(`Failed to find nearby playgrounds: ${error}`)
     } finally {
       setLoading(false)
@@ -331,8 +309,6 @@ export default function SearchPage() {
   }
 
   const getNearbyDatabasePlaygrounds = async (lat: number, lon: number): Promise<PlaygroundData[]> => {
-    // For simplicity, return all database playgrounds
-    // In a real app, you'd implement proper geospatial queries
     return dbPlaygrounds.map(pg => ({
       id: `db-${pg.id}`,
       name: pg.name,
@@ -344,18 +320,18 @@ export default function SearchPage() {
       surface: 'unknown',
       access: pg.accessibility,
       opening_hours: pg.opening_hours,
-      source: 'database' as const
+      source: 'database' as const,
+      explorerRating: pg.explorerRating,
+      googleRating: pg.googleRating,
     }))
   }
 
   const handleLocationSearch = async (location: string) => {
-    console.log(`🔍 Starting location search for: "${location}"`)
     setLoading(true)
     setError(null)
-    setSearchQuery(location) // Update search input
+    setSearchQuery(location)
 
     try {
-      // Geocode the location first
       let searchLat: number | null = null
       let searchLon: number | null = null
 
@@ -371,7 +347,6 @@ export default function SearchPage() {
             searchLat = parseFloat(geocodeData[0].lat)
             searchLon = parseFloat(geocodeData[0].lon)
             setSearchCenter([searchLat, searchLon])
-            console.log(`📍 Search center for ${location}: ${searchLat}, ${searchLon}`)
           }
         }
       } catch (geocodeError) {
@@ -383,11 +358,7 @@ export default function SearchPage() {
         searchDatabasePlaygrounds(location)
       ])
 
-      console.log("✅ Location search completed - External:", externalResults.length, "Database:", dbResults.length)
-
       const combinedResults = [...externalResults, ...dbResults]
-      
-      // Sort by distance from search location if we have coordinates
       let sortedResults = combinedResults
       if (searchLat && searchLon) {
         sortedResults = combinedResults.sort((a, b) => {
@@ -405,39 +376,27 @@ export default function SearchPage() {
         } else {
           setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
         }
-        console.log("📍 Map centered")
       } else {
         setError(`No playgrounds found in ${location}.`)
       }
     } catch (error) {
-      console.error("❌ Location search failed:", error)
       setError(`Location search failed: ${error}`)
     } finally {
       setLoading(false)
     }
   }
 
-  // FIXED: View on Map function
   const handlePlaygroundClick = (playground: PlaygroundData) => {
-    console.log("🏰 Playground clicked:", playground)
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
-    
-    // Switch to map view automatically
     const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
     if (mapTab) {
       mapTab.click()
     }
   }
 
-  // FIXED: View Details function with proper ID handling
   const handleViewDetails = (playground: PlaygroundData) => {
-    console.log("🔍 View details for:", playground)
-    
-    // Handle different ID formats
     let playgroundId = playground.id
-    
-    // Remove prefixes for routing
     if (playgroundId.startsWith('google-')) {
       playgroundId = playgroundId.replace('google-', '')
     } else if (playgroundId.startsWith('db-')) {
@@ -445,12 +404,9 @@ export default function SearchPage() {
     } else if (playgroundId.startsWith('osm-')) {
       playgroundId = playgroundId.replace('osm-', '')
     } else if (playgroundId.startsWith('mock-')) {
-      // For mock data, create a special route or show a message
       alert('This is test data. Real playground details page would show here.')
       return
     }
-    
-    console.log("🔍 Navigating to playground ID:", playgroundId)
     router.push(`/playground/${playgroundId}`)
   }
 
@@ -459,8 +415,6 @@ export default function SearchPage() {
       router.push('/auth/signin')
       return
     }
-    
-    // Handle ID the same way as view details
     let playgroundId = playground.id
     if (playgroundId.startsWith('google-')) {
       playgroundId = playgroundId.replace('google-', '')
@@ -472,21 +426,17 @@ export default function SearchPage() {
       alert('This is test data. Real rating page would show here.')
       return
     }
-    
     router.push(`/playground/${playgroundId}?tab=rating`)
   }
 
-  // Calculate distance from search center (improved sorting display)
   const getDistanceFromSearchCenter = (playground: PlaygroundData): number | null => {
     if (!searchCenter) return null
     return calculateDistance(searchCenter[0], searchCenter[1], playground.lat, playground.lon)
   }
 
-  // Sort playgrounds by distance from search center or user location
   const sortedPlaygrounds = [...playgrounds].sort((a, b) => {
     const referencePoint = searchCenter || userLocation
     if (!referencePoint) return 0
-    
     const distA = calculateDistance(referencePoint[0], referencePoint[1], a.lat, a.lon)
     const distB = calculateDistance(referencePoint[0], referencePoint[1], b.lat, b.lon)
     return distA - distB
@@ -670,7 +620,6 @@ export default function SearchPage() {
                               <span className="text-sm">
                                 {playground.address && `${playground.address}, `}
                                 {playground.city || "UK"}
-                                {/* Show distance based on what's available */}
                                 {distanceFromSearch && (
                                   <span className="ml-2 text-orange-600 font-medium">
                                     • {distanceFromSearch.toFixed(1)}km from search
@@ -716,9 +665,16 @@ export default function SearchPage() {
                                playground.source === 'database' ? 'User Added' :
                                playground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
                             </Badge>
-                            {playground.rating && (
+                            {/* Google Rating */}
+                            {playground.googleRating && (
                               <Badge variant="outline" className="border-yellow-300 text-yellow-700">
-                                ⭐ {playground.rating.toFixed(1)}
+                                ⭐ Google Rating: {playground.googleRating.toFixed(1)}
+                              </Badge>
+                            )}
+                            {/* Playground Explorer Rating */}
+                            {playground.explorerRating && (
+                              <Badge variant="outline" className="border-pink-300 text-pink-700">
+                                ⭐ Playground Explorer: {playground.explorerRating.toFixed(1)}
                               </Badge>
                             )}
                           </div>
@@ -810,12 +766,18 @@ export default function SearchPage() {
                           {selectedPlayground.opening_hours && (
                             <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
                           )}
-                          {selectedPlayground.rating && (
+                          {/* Google Rating */}
+                          {selectedPlayground.googleRating && (
                             <p className="text-yellow-600 font-medium mb-2">
-                              ⭐ Rating: {selectedPlayground.rating.toFixed(1)} / 5.0
+                              ⭐ Google Rating: {selectedPlayground.googleRating.toFixed(1)} / 5.0
                             </p>
                           )}
-                          {/* Show distance info */}
+                          {/* Playground Explorer Rating */}
+                          {selectedPlayground.explorerRating && (
+                            <p className="text-pink-600 font-medium mb-2">
+                              ⭐ Playground Explorer: {selectedPlayground.explorerRating.toFixed(1)} / 5.0
+                            </p>
+                          )}
                           {searchCenter && (
                             <p className="text-orange-600 font-medium mb-2">
                               Distance from search: {calculateDistance(
