@@ -1,4 +1,4 @@
-// UK Playground data fetching utilities
+// Enhanced UK Playground data fetching with Google Places API
 
 export interface PlaygroundData {
   id: string
@@ -12,9 +12,328 @@ export interface PlaygroundData {
   surface?: string
   access?: string
   opening_hours?: string
+  rating?: number
+  source?: 'google' | 'osm' | 'database' | 'mock'
 }
 
-// Function to check if two playgrounds are duplicates based on name and location
+// Google Places API integration
+class GooglePlacesAPI {
+  private apiKey: string
+
+  constructor() {
+    this.apiKey = process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY || process.env.GOOGLE_PLACES_API_KEY || ''
+    if (!this.apiKey) {
+      console.warn('⚠️ Google Places API key not found. Using fallback data sources.')
+    }
+  }
+
+  // Search for playgrounds near coordinates
+  async searchNearbyPlaygrounds(lat: number, lon: number, radiusMeters = 10000): Promise<PlaygroundData[]> {
+    if (!this.apiKey) {
+      console.log('🔄 No Google API key, skipping Google Places search')
+      return []
+    }
+
+    console.log(`🔍 Google Places: Searching near ${lat}, ${lon} within ${radiusMeters}m`)
+
+    try {
+      // Use multiple search terms to find different types of playgrounds
+      const searchTerms = [
+        'playground',
+        'children playground', 
+        'kids playground',
+        'play area',
+        'children play area',
+        'park playground',
+        'recreation ground playground'
+      ]
+
+      const allResults: PlaygroundData[] = []
+
+      for (const searchTerm of searchTerms) {
+        try {
+          const results = await this.performNearbySearch(lat, lon, radiusMeters, searchTerm)
+          allResults.push(...results)
+          
+          // Small delay between searches to respect rate limits
+          await new Promise(resolve => setTimeout(resolve, 200))
+        } catch (error) {
+          console.warn(`⚠️ Google search failed for "${searchTerm}":`, error)
+          continue
+        }
+      }
+
+      // Remove duplicates based on place_id
+      const uniqueResults = this.removeDuplicates(allResults)
+      console.log(`✅ Google Places found ${uniqueResults.length} unique playgrounds`)
+      
+      return uniqueResults
+
+    } catch (error) {
+      console.error('❌ Google Places API error:', error)
+      return []
+    }
+  }
+
+  // Search for playgrounds by location name
+  async searchByLocation(location: string): Promise<PlaygroundData[]> {
+    if (!this.apiKey) {
+      console.log('🔄 No Google API key, skipping Google Places search')
+      return []
+    }
+
+    console.log(`🔍 Google Places: Searching for playgrounds in "${location}"`)
+
+    try {
+      const searchQueries = [
+        `playground in ${location}`,
+        `children playground ${location}`,
+        `play area ${location}`,
+        `park playground ${location}`,
+        `kids play area ${location} UK`
+      ]
+
+      const allResults: PlaygroundData[] = []
+
+      for (const query of searchQueries) {
+        try {
+          const results = await this.performTextSearch(query)
+          allResults.push(...results)
+          
+          // Small delay between searches
+          await new Promise(resolve => setTimeout(resolve, 300))
+        } catch (error) {
+          console.warn(`⚠️ Google text search failed for "${query}":`, error)
+          continue
+        }
+      }
+
+      const uniqueResults = this.removeDuplicates(allResults)
+      console.log(`✅ Google Places found ${uniqueResults.length} playgrounds for "${location}"`)
+      
+      return uniqueResults
+
+    } catch (error) {
+      console.error('❌ Google Places text search error:', error)
+      return []
+    }
+  }
+
+  // Perform nearby search
+  private async performNearbySearch(lat: number, lon: number, radius: number, keyword: string): Promise<PlaygroundData[]> {
+    const url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+    const params = new URLSearchParams({
+      location: `${lat},${lon}`,
+      radius: radius.toString(),
+      keyword: keyword,
+      type: 'park', // Primary type
+      key: this.apiKey
+    })
+
+    const response = await fetch(`${url}?${params}`)
+    
+    if (!response.ok) {
+      throw new Error(`Google Places API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+    
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      throw new Error(`Google Places API error: ${data.status} - ${data.error_message || 'Unknown error'}`)
+    }
+
+    return this.parseGoogleResults(data.results || [])
+  }
+
+  // Perform text search
+  private async performTextSearch(query: string): Promise<PlaygroundData[]> {
+    const url = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
+    const params = new URLSearchParams({
+      query: query,
+      region: 'uk', // Bias towards UK results
+      key: this.apiKey
+    })
+
+    const response = await fetch(`${url}?${params}`)
+    
+    if (!response.ok) {
+      throw new Error(`Google Places API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+    
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      throw new Error(`Google Places API error: ${data.status} - ${data.error_message || 'Unknown error'}`)
+    }
+
+    return this.parseGoogleResults(data.results || [])
+  }
+
+  // Parse Google Places results into our format
+  private parseGoogleResults(results: any[]): PlaygroundData[] {
+    return results
+      .filter(place => this.isPlaygroundRelevant(place))
+      .map(place => ({
+        id: `google-${place.place_id}`,
+        name: this.generatePlaygroundName(place),
+        lat: place.geometry.location.lat,
+        lon: place.geometry.location.lng,
+        address: place.vicinity || place.formatted_address,
+        city: this.extractCity(place),
+        rating: place.rating,
+        amenities: this.extractAmenities(place),
+        opening_hours: this.formatOpeningHours(place.opening_hours),
+        source: 'google' as const
+      }))
+  }
+
+  // Filter out non-playground results
+  private isPlaygroundRelevant(place: any): boolean {
+    const name = place.name.toLowerCase()
+    const types = place.types || []
+    
+    // Must contain playground-related keywords
+    const playgroundKeywords = [
+      'playground', 'play area', 'play ground', 'children', 'kids', 
+      'recreation', 'park', 'garden', 'green', 'common'
+    ]
+    
+    const hasPlaygroundKeyword = playgroundKeywords.some(keyword => 
+      name.includes(keyword)
+    )
+
+    // Exclude irrelevant places
+    const excludeKeywords = [
+      'school', 'nursery', 'hotel', 'restaurant', 'shop', 'store',
+      'gym', 'centre', 'hospital', 'church', 'mosque', 'temple'
+    ]
+    
+    const hasExcludeKeyword = excludeKeywords.some(keyword => 
+      name.includes(keyword)
+    )
+
+    return hasPlaygroundKeyword && !hasExcludeKeyword
+  }
+
+  // Generate meaningful playground names
+  private generatePlaygroundName(place: any): string {
+    let name = place.name
+
+    // If name is generic, try to make it more specific
+    if (name.toLowerCase() === 'park' || name.toLowerCase() === 'playground') {
+      const vicinity = place.vicinity || place.formatted_address || ''
+      const addressParts = vicinity.split(',')
+      if (addressParts.length > 0) {
+        const locationName = addressParts[0].trim()
+        name = `${locationName} ${name}`
+      }
+    }
+
+    // Add "Playground" if not already included
+    const nameLower = name.toLowerCase()
+    if (!nameLower.includes('playground') && !nameLower.includes('play area') && !nameLower.includes('park')) {
+      name += ' Playground'
+    }
+
+    return name
+  }
+
+  // Extract city from place data
+  private extractCity(place: any): string | undefined {
+    const vicinity = place.vicinity || place.formatted_address || ''
+    const parts = vicinity.split(',')
+    
+    // Usually the city is the second part or the part before the postcode
+    for (let i = 1; i < parts.length; i++) {
+      const part = parts[i].trim()
+      // Skip postcodes (UK format)
+      if (!/^[A-Z]{1,2}\d{1,2}\s?\d[A-Z]{2}$/i.test(part)) {
+        return part
+      }
+    }
+    
+    return parts[0]?.trim()
+  }
+
+  // Extract amenities from Google Places data
+  private extractAmenities(place: any): string[] {
+    const amenities: string[] = []
+    const types = place.types || []
+    
+    // Map Google Place types to amenities
+    if (types.includes('park')) amenities.push('Park Setting')
+    if (types.includes('amusement_park')) amenities.push('Amusement Park')
+    if (place.rating && place.rating >= 4.0) amenities.push('Highly Rated')
+    
+    // Add amenities based on name
+    const name = place.name.toLowerCase()
+    if (name.includes('adventure')) amenities.push('Adventure Equipment')
+    if (name.includes('water')) amenities.push('Water Play')
+    if (name.includes('toddler')) amenities.push('Toddler Area')
+    if (name.includes('climbing')) amenities.push('Climbing Equipment')
+    
+    return amenities
+  }
+
+  // Format opening hours
+  private formatOpeningHours(openingHours: any): string | undefined {
+    if (!openingHours || !openingHours.weekday_text) {
+      return undefined
+    }
+    
+    // Return a summary like "Monday: 9:00 AM – 5:00 PM"
+    return openingHours.weekday_text[0] // Today's hours
+  }
+
+  // Remove duplicates based on proximity and name similarity
+  private removeDuplicates(playgrounds: PlaygroundData[]): PlaygroundData[] {
+    const unique: PlaygroundData[] = []
+    
+    for (const playground of playgrounds) {
+      const isDuplicate = unique.some(existing => {
+        const distance = this.calculateDistance(
+          playground.lat, playground.lon,
+          existing.lat, existing.lon
+        )
+        const nameSimilar = this.areNamesSimilar(playground.name, existing.name)
+        
+        return distance < 0.1 && nameSimilar // Within 100m and similar names
+      })
+      
+      if (!isDuplicate) {
+        unique.push(playground)
+      }
+    }
+    
+    return unique
+  }
+
+  // Check if two names are similar
+  private areNamesSimilar(name1: string, name2: string): boolean {
+    const clean1 = name1.toLowerCase().replace(/[^\w\s]/g, '')
+    const clean2 = name2.toLowerCase().replace(/[^\w\s]/g, '')
+    
+    // Simple similarity check
+    return clean1.includes(clean2) || clean2.includes(clean1)
+  }
+
+  // Calculate distance between two points
+  private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371 // Earth's radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180
+    const dLon = ((lon2 - lon1) * Math.PI) / 180
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2)
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    return R * c
+  }
+}
+
+// Create Google Places API instance
+const googlePlacesAPI = new GooglePlacesAPI()
+
+// Function to check if two playgrounds are duplicates
 function areDuplicates(playground1: PlaygroundData, playground2: PlaygroundData): boolean {
   const nameSimilarity = playground1.name.toLowerCase() === playground2.name.toLowerCase()
   const locationProximity =
@@ -23,237 +342,146 @@ function areDuplicates(playground1: PlaygroundData, playground2: PlaygroundData)
   return nameSimilarity && locationProximity
 }
 
-// Enhanced name generation with better fallbacks
-function generatePlaygroundName(element: any, locationInfo?: any): string {
-  const tags = element.tags || {}
-  
-  // Priority 1: Direct name tags
-  if (tags.name) return tags.name
-  if (tags["name:en"]) return tags["name:en"]
-  if (tags["official_name"]) return tags["official_name"]
-  if (tags["short_name"]) return tags["short_name"]
-  
-  // Priority 2: Location-based names from reverse geocoding
-  if (locationInfo?.address) {
-    const address = locationInfo.address
-    
-    // Try to build a meaningful name from location
-    if (address.leisure) return address.leisure
-    if (address.amenity) return address.amenity
-    if (address.park) return `${address.park} Playground`
-    if (address.neighbourhood) return `${address.neighbourhood} Play Area`
-    if (address.suburb) return `${address.suburb} Playground`
-    if (address.village) return `${address.village} Play Area`
-    if (address.hamlet) return `${address.hamlet} Playground`
-    
-    // Use road/street names as last resort for location-based naming
-    if (address.road) return `${address.road} Play Area`
-    if (address.pedestrian) return `${address.pedestrian} Playground`
-  }
-  
-  // Priority 3: Descriptive names based on tags
-  if (tags.leisure === "park") return "Community Park Playground"
-  if (tags.leisure === "recreation_ground") return "Recreation Ground"
-  if (tags.amenity === "playground") return "Local Playground"
-  if (tags.leisure === "playground") return "Play Area"
-  if (tags.play_area === "yes") return "Children's Play Area"
-  
-  // Priority 4: Location-based fallback using coordinates
-  if (element.lat && element.lon) {
-    const lat = element.lat || element.center?.lat
-    const lon = element.lon || element.center?.lon
-    
-    // Create a more user-friendly coordinate-based name
-    const latDir = lat > 0 ? 'N' : 'S'
-    const lonDir = lon > 0 ? 'E' : 'W'
-    const shortLat = Math.abs(lat).toFixed(3)
-    const shortLon = Math.abs(lon).toFixed(3)
-    
-    return `Playground at ${shortLat}°${latDir}, ${shortLon}°${lonDir}`
-  }
-  
-  // Last resort: Use element type and ID but make it more user-friendly
-  const playgroundType = getPlaygroundType(tags)
-  return `${playgroundType} #${element.id.toString().slice(-4)}`
-}
-
-// Fetch playgrounds from OpenStreetMap using Overpass API
+// Enhanced main search function with Google Places as primary source
 export async function fetchPlaygroundsNearLocation(lat: number, lon: number, radiusKm = 10): Promise<PlaygroundData[]> {
-  console.log(`🔍 Fetching playgrounds near ${lat}, ${lon} within ${radiusKm}km`)
-
-  // Optimized queries - start with most specific and reliable
-  const queries = [
-    // Query 1: Direct playground amenities (most reliable)
-    `
-    [out:json][timeout:20];
-    (
-      node["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
-      way["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
-      relation["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
-    );
-    out center meta;
-    `,
-    // Query 2: Leisure playgrounds
-    `
-    [out:json][timeout:20];
-    (
-      node["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
-      way["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
-      relation["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
-    );
-    out center meta;
-    `,
-    // Query 3: Parks with playground equipment
-    `
-    [out:json][timeout:20];
-    (
-      node["leisure"="park"]["playground"="yes"](around:${radiusKm * 1000},${lat},${lon});
-      way["leisure"="park"]["playground"="yes"](around:${radiusKm * 1000},${lat},${lon});
-      node["play_area"="yes"](around:${radiusKm * 1000},${lat},${lon});
-      way["play_area"="yes"](around:${radiusKm * 1000},${lat},${lon});
-    );
-    out center meta;
-    `,
-  ]
+  console.log(`🎯 Searching playgrounds near ${lat}, ${lon} within ${radiusKm}km using hybrid approach`)
 
   const allPlaygrounds: PlaygroundData[] = []
 
-  for (let i = 0; i < queries.length; i++) {
-    try {
-      console.log(`📡 Executing query ${i + 1}/${queries.length}...`)
-
-      const response = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: `data=${encodeURIComponent(queries[i])}`,
-      })
-
-      if (!response.ok) {
-        console.warn(`⚠️ Query ${i + 1} failed with status: ${response.status}`)
-        continue
-      }
-
-      const data = await response.json()
-      console.log(`📊 Query ${i + 1} returned ${data.elements?.length || 0} elements`)
-
-      if (data.elements && Array.isArray(data.elements) && data.elements.length > 0) {
-        // Process elements with improved naming
-        const playgroundPromises = data.elements.map(async (element: any) => {
-          let locationInfo = null
-          
-          // Get location info for better naming
-          if (element.lat && element.lon) {
-            try {
-              const reverseGeocodeUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${element.lat}&lon=${element.lon}&zoom=18`
-              const reverseGeocodeResponse = await fetch(reverseGeocodeUrl, {
-                headers: {
-                  "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
-                },
-              })
-              
-              if (reverseGeocodeResponse.ok) {
-                locationInfo = await reverseGeocodeResponse.json()
-                console.log(`📍 Got location info for element ${element.id}:`, locationInfo?.display_name)
-              }
-              
-              // Small delay to be respectful to Nominatim
-              await new Promise(resolve => setTimeout(resolve, 100))
-              
-            } catch (geocodeError) {
-              console.warn(`⚠️ Reverse geocoding failed for element ${element.id}:`, geocodeError)
-            }
-          }
-
-          // Generate a proper name using enhanced logic
-          const name = generatePlaygroundName(element, locationInfo)
-
-          // Extract address info
-          let address = element.tags?.["addr:street"] || element.tags?.["addr:full"]
-          let city = element.tags?.["addr:city"] || element.tags?.["addr:town"]
-          let postcode = element.tags?.["addr:postcode"]
-
-          // Use reverse geocoding data if address is missing
-          if (locationInfo?.address && !address) {
-            address = locationInfo.address.road || locationInfo.address.neighbourhood
-            city = locationInfo.address.city || locationInfo.address.town || locationInfo.address.village
-            postcode = locationInfo.address.postcode
-          }
-
-          const playground: PlaygroundData = {
-            id: `${element.type}-${element.id}`,
-            name: name,
-            lat: element.lat || element.center?.lat,
-            lon: element.lon || element.center?.lon,
-            address: address,
-            city: city,
-            postcode: postcode,
-            amenities: extractAmenities(element.tags),
-            surface: element.tags?.surface,
-            access: element.tags?.access,
-            opening_hours: element.tags?.opening_hours,
-          }
-          
-          console.log(`🏰 Processed playground: "${playground.name}" at ${playground.lat}, ${playground.lon}`)
-          return playground
-        })
-
-        const resolvedPlaygrounds = await Promise.all(playgroundPromises)
-        const validPlaygrounds = resolvedPlaygrounds.filter(
-          (playground: PlaygroundData) => playground.lat && playground.lon,
-        )
-
-        console.log(`✅ Query ${i + 1} yielded ${validPlaygrounds.length} valid playgrounds`)
-        allPlaygrounds.push(...validPlaygrounds)
-
-        // Add delay between queries to be respectful
-        if (i < queries.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1000))
-        }
-        
-      } else {
-        console.log(`📭 Query ${i + 1} returned no elements`)
-      }
-
-    } catch (error) {
-      console.error(`❌ Query ${i + 1} failed:`, error)
-      continue
-    }
+  // 1. Try Google Places first (best data quality)
+  try {
+    console.log('🔍 Step 1: Searching Google Places...')
+    const googleResults = await googlePlacesAPI.searchNearbyPlaygrounds(lat, lon, radiusKm * 1000)
+    allPlaygrounds.push(...googleResults)
+    console.log(`✅ Google Places found ${googleResults.length} playgrounds`)
+  } catch (error) {
+    console.warn('⚠️ Google Places search failed:', error)
   }
 
-  // Remove duplicates
-  const uniquePlaygrounds = allPlaygrounds.reduce((acc: PlaygroundData[], playground) => {
-    if (!acc.some((existingPlayground) => areDuplicates(playground, existingPlayground))) {
-      acc.push(playground)
-    }
-    return acc
-  }, [])
-
-  console.log(`🎯 Found ${uniquePlaygrounds.length} unique playgrounds`)
-
-  // Only return mock data if we found absolutely nothing
-  if (uniquePlaygrounds.length === 0) {
-    console.log("🔄 No real playgrounds found, trying broader search...")
-    return await tryBroaderSearch(lat, lon, radiusKm * 1.5)
+  // 2. If we have good results from Google, we might not need other sources
+  if (allPlaygrounds.length >= 5) {
+    console.log('🎉 Found sufficient results from Google Places, skipping other sources')
+    return allPlaygrounds.slice(0, 20) // Limit to 20 results
   }
 
-  return uniquePlaygrounds
+  // 3. Supplement with OpenStreetMap data if needed
+  try {
+    console.log('🔍 Step 2: Supplementing with OpenStreetMap...')
+    const osmResults = await fetchFromOpenStreetMap(lat, lon, radiusKm)
+    
+    // Add OSM results that aren't duplicates
+    for (const osmPlayground of osmResults) {
+      const isDuplicate = allPlaygrounds.some(existing => areDuplicates(osmPlayground, existing))
+      if (!isDuplicate) {
+        allPlaygrounds.push({ ...osmPlayground, source: 'osm' })
+      }
+    }
+    console.log(`✅ Added ${osmResults.length} unique OpenStreetMap results`)
+  } catch (error) {
+    console.warn('⚠️ OpenStreetMap search failed:', error)
+  }
+
+  // 4. Return results or mock data if nothing found
+  if (allPlaygrounds.length === 0) {
+    console.log('🎭 No real playgrounds found, returning test data')
+    return getMockPlaygrounds(lat, lon)
+  }
+
+  // Sort by rating if available, then by distance
+  const sortedPlaygrounds = allPlaygrounds.sort((a, b) => {
+    if (a.rating && b.rating) {
+      return b.rating - a.rating // Higher rating first
+    }
+    if (a.rating && !b.rating) return -1 // Rated items first
+    if (!a.rating && b.rating) return 1
+    
+    // Sort by distance if no ratings
+    const distA = calculateDistance(lat, lon, a.lat, a.lon)
+    const distB = calculateDistance(lat, lon, b.lat, b.lon)
+    return distA - distB
+  })
+
+  console.log(`🎯 Returning ${sortedPlaygrounds.length} total playgrounds`)
+  return sortedPlaygrounds.slice(0, 20) // Limit to 20 results
 }
 
-// Enhanced broader search with better filtering
-async function tryBroaderSearch(lat: number, lon: number, radiusKm: number): Promise<PlaygroundData[]> {
-  console.log(`🔍 Trying broader search within ${radiusKm}km`)
+// Enhanced location search with Google Places
+export async function searchPlaygroundsByLocation(location: string): Promise<PlaygroundData[]> {
+  console.log(`🎯 Searching playgrounds for location: "${location}" using hybrid approach`)
 
-  const broadQuery = `
-    [out:json][timeout:25];
+  const allPlaygrounds: PlaygroundData[] = []
+
+  // 1. Try Google Places text search first
+  try {
+    console.log('🔍 Step 1: Google Places text search...')
+    const googleResults = await googlePlacesAPI.searchByLocation(location)
+    allPlaygrounds.push(...googleResults)
+    console.log(`✅ Google Places found ${googleResults.length} playgrounds`)
+  } catch (error) {
+    console.warn('⚠️ Google Places text search failed:', error)
+  }
+
+  // 2. If Google found good results, we might not need geocoding + nearby search
+  if (allPlaygrounds.length >= 3) {
+    console.log('🎉 Found sufficient results from Google text search')
+    return allPlaygrounds.slice(0, 20)
+  }
+
+  // 3. Fall back to geocoding + nearby search
+  try {
+    console.log('🔍 Step 2: Geocoding location for nearby search...')
+    
+    // Geocode the location
+    const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}&countrycodes=gb&limit=1&addressdetails=1`
+    const geocodeResponse = await fetch(geocodeUrl, {
+      headers: { "User-Agent": "PlaygroundExplorer/1.0" }
+    })
+
+    if (geocodeResponse.ok) {
+      const geocodeData = await geocodeResponse.json()
+      
+      if (geocodeData && geocodeData.length > 0) {
+        const { lat, lon } = geocodeData[0]
+        const numLat = parseFloat(lat)
+        const numLon = parseFloat(lon)
+        
+        console.log(`✅ Geocoded "${location}" to ${numLat}, ${numLon}`)
+        
+        // Search around this location
+        const nearbyResults = await fetchPlaygroundsNearLocation(numLat, numLon, 15)
+        
+        // Add non-duplicate results
+        for (const playground of nearbyResults) {
+          const isDuplicate = allPlaygrounds.some(existing => areDuplicates(playground, existing))
+          if (!isDuplicate) {
+            allPlaygrounds.push(playground)
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️ Geocoding fallback failed:', error)
+  }
+
+  // 4. Return results or mock data
+  if (allPlaygrounds.length === 0) {
+    console.log('🎭 No real playgrounds found, returning test data')
+    return getMockPlaygroundsForLocation(location)
+  }
+
+  console.log(`🎯 Returning ${allPlaygrounds.length} total playgrounds for "${location}"`)
+  return allPlaygrounds.slice(0, 20)
+}
+
+// Simplified OpenStreetMap fetcher (as fallback)
+async function fetchFromOpenStreetMap(lat: number, lon: number, radiusKm: number): Promise<PlaygroundData[]> {
+  const query = `
+    [out:json][timeout:15];
     (
       node["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
       way["amenity"="playground"](around:${radiusKm * 1000},${lat},${lon});
       node["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
       way["leisure"="playground"](around:${radiusKm * 1000},${lat},${lon});
-      node["leisure"="park"][~"playground|play"~"yes"](around:${radiusKm * 1000},${lat},${lon});
-      way["leisure"="park"][~"playground|play"~"yes"](around:${radiusKm * 1000},${lat},${lon});
     );
     out center meta;
   `
@@ -261,251 +489,78 @@ async function tryBroaderSearch(lat: number, lon: number, radiusKm: number): Pro
   try {
     const response = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `data=${encodeURIComponent(broadQuery)}`,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `data=${encodeURIComponent(query)}`,
     })
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+    if (!response.ok) return []
 
     const data = await response.json()
-    console.log(`📊 Broader search returned ${data.elements?.length || 0} elements`)
+    if (!data.elements) return []
 
-    if (data.elements && data.elements.length > 0) {
-      const playgrounds = await Promise.all(
-        data.elements.map(async (element: any) => {
-          // Get location context for better naming
-          let locationInfo = null
-          if (element.lat && element.lon) {
-            try {
-              const reverseGeocodeUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${element.lat}&lon=${element.lon}&zoom=16`
-              const reverseGeocodeResponse = await fetch(reverseGeocodeUrl, {
-                headers: {
-                  "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
-                },
-              })
-              if (reverseGeocodeResponse.ok) {
-                locationInfo = await reverseGeocodeResponse.json()
-              }
-              await new Promise(resolve => setTimeout(resolve, 100))
-            } catch (error) {
-              console.warn(`⚠️ Reverse geocoding failed:`, error)
-            }
-          }
-
-          return {
-            id: `broad-${element.type}-${element.id}`,
-            name: generatePlaygroundName(element, locationInfo),
-            lat: element.lat || element.center?.lat,
-            lon: element.lon || element.center?.lon,
-            address: element.tags?.["addr:street"] || locationInfo?.address?.road,
-            city: element.tags?.["addr:city"] || element.tags?.["addr:town"] || locationInfo?.address?.city,
-            postcode: element.tags?.["addr:postcode"] || locationInfo?.address?.postcode,
-            amenities: extractAmenities(element.tags),
-            surface: element.tags?.surface,
-            access: element.tags?.access,
-            opening_hours: element.tags?.opening_hours,
-          }
-        })
-      )
-
-      const validPlaygrounds = playgrounds.filter((playground: PlaygroundData) => playground.lat && playground.lon)
-      console.log(`✅ Broader search found ${validPlaygrounds.length} valid results`)
-      
-      if (validPlaygrounds.length > 0) {
-        return validPlaygrounds
-      }
-    }
-  } catch (error) {
-    console.error("❌ Broader search failed:", error)
-  }
-
-  // Only return mock data as absolute last resort
-  console.log("🎭 All searches failed, returning mock data...")
-  return getMockPlaygrounds(lat, lon)
-}
-
-// Search playgrounds by location name (city, postcode, etc.) - Enhanced
-export async function searchPlaygroundsByLocation(location: String): Promise<PlaygroundData[]> {
-  console.log(`🔍 Searching playgrounds by location: "${location}"`)
-
-  try {
-    // Enhanced geocoding with better parameters for UK locations
-    const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}&countrycodes=gb&limit=3&dedupe=1&addressdetails=1`
-    console.log("📡 Geocoding URL:", geocodeUrl)
-
-    const geocodeResponse = await fetch(geocodeUrl, {
-      headers: {
-        "User-Agent": "PlaygroundExplorer/1.0 (https://playground-explorer.vercel.app)",
-      },
-    })
-
-    if (!geocodeResponse.ok) {
-      throw new Error(`Geocoding failed! status: ${geocodeResponse.status}`)
-    }
-
-    const geocodeData = await geocodeResponse.json()
-    console.log(`📍 Geocoding found ${geocodeData.length} results for "${location}"`)
-
-    if (!geocodeData || geocodeData.length === 0) {
-      console.log(`❌ No location found for: ${location}`)
-      return getMockPlaygroundsForLocation(location)
-    }
-
-    // Use the best geocoding result (first one is usually most relevant)
-    const bestMatch = geocodeData[0]
-    const { lat, lon } = bestMatch
-    const numLat = parseFloat(lat)
-    const numLon = parseFloat(lon)
-
-    console.log(`✅ Using coordinates for ${location}: ${numLat}, ${numLon}`)
-    console.log(`📍 Location type: ${bestMatch.type}, importance: ${bestMatch.importance}`)
-
-    // Adjust search radius based on location type
-    let searchRadius = 15 // default 15km
-    
-    if (bestMatch.type === 'postcode' || bestMatch.class === 'place') {
-      searchRadius = 5 // smaller radius for postcodes
-    } else if (bestMatch.type === 'city' || bestMatch.type === 'town') {
-      searchRadius = 25 // larger radius for cities
-    }
-
-    console.log(`🎯 Using search radius: ${searchRadius}km for location type: ${bestMatch.type}`)
-
-    // Search for playgrounds around this location
-    const playgrounds = await fetchPlaygroundsNearLocation(numLat, numLon, searchRadius)
-    
-    if (playgrounds.length === 0) {
-      console.log(`⚠️ No playgrounds found near ${location}, trying fallback...`)
-      
-      // Try other geocoding results if the first one didn't work
-      for (let i = 1; i < Math.min(geocodeData.length, 3); i++) {
-        const altResult = geocodeData[i]
-        const altLat = parseFloat(altResult.lat)
-        const altLon = parseFloat(altResult.lon)
-        
-        console.log(`🔄 Trying alternative location: ${altResult.display_name}`)
-        const altPlaygrounds = await fetchPlaygroundsNearLocation(altLat, altLon, searchRadius)
-        
-        if (altPlaygrounds.length > 0) {
-          console.log(`✅ Found ${altPlaygrounds.length} playgrounds at alternative location`)
-          return altPlaygrounds
-        }
-      }
-      
-      // If still no results, return mock data
-      console.log(`🎭 No real playgrounds found for ${location}, returning mock data`)
-      return getMockPlaygroundsForLocation(location)
-    }
-
-    console.log(`✅ Found ${playgrounds.length} playgrounds for "${location}"`)
-    return playgrounds
+    return data.elements
+      .filter((element: any) => element.lat && element.lon)
+      .map((element: any) => ({
+        id: `osm-${element.type}-${element.id}`,
+        name: element.tags?.name || `${getPlaygroundType(element.tags)} near ${lat.toFixed(3)}, ${lon.toFixed(3)}`,
+        lat: element.lat || element.center?.lat,
+        lon: element.lon || element.center?.lon,
+        address: element.tags?.["addr:street"],
+        city: element.tags?.["addr:city"] || element.tags?.["addr:town"],
+        amenities: extractAmenities(element.tags),
+        source: 'osm' as const
+      }))
 
   } catch (error) {
-    console.error("❌ Error searching playgrounds by location:", error)
-    console.log("🎭 Returning mock data due to error")
-    return getMockPlaygroundsForLocation(location)
+    console.error('❌ OpenStreetMap fallback failed:', error)
+    return []
   }
 }
 
-// Get user's current location
+// Helper functions (simplified versions)
+function getPlaygroundType(tags: any): string {
+  if (!tags) return "Playground"
+  if (tags.amenity === "playground") return "Playground"
+  if (tags.leisure === "playground") return "Play Area"
+  return "Playground"
+}
+
+function extractAmenities(tags: any): string[] {
+  if (!tags) return []
+  const amenities: string[] = []
+  
+  if (tags.swing === "yes") amenities.push("Swings")
+  if (tags.slide === "yes") amenities.push("Slides")
+  if (tags.climbing_frame === "yes") amenities.push("Climbing Frame")
+  if (tags.sandpit === "yes") amenities.push("Sand Pit")
+  
+  return amenities
+}
+
 export function getCurrentLocation(): Promise<{ lat: number; lon: number }> {
-  console.log("📍 Getting user's current location...")
-
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      console.error("❌ Geolocation is not supported")
       reject(new Error("Geolocation is not supported"))
       return
     }
 
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const location = {
-          lat: position.coords.latitude,
-          lon: position.coords.longitude,
-        }
-        console.log("✅ Got user location:", location)
-        resolve(location)
-      },
-      (error) => {
-        console.error("❌ Geolocation error:", error)
-        reject(error)
-      },
+      (position) => resolve({
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+      }),
+      (error) => reject(error),
       {
         enableHighAccuracy: true,
-        timeout: 15000, // Increased timeout
-        maximumAge: 300000, // 5 minutes
-      },
+        timeout: 15000,
+        maximumAge: 300000,
+      }
     )
   })
 }
 
-// Determine playground type from tags
-function getPlaygroundType(tags: any): string {
-  if (!tags) return "Playground"
-
-  if (tags.amenity === "playground") return "Playground"
-  if (tags.leisure === "playground") return "Play Area"
-  if (tags.leisure === "park") return "Park"
-  if (tags.leisure === "recreation_ground") return "Recreation Ground"
-  if (tags.play_area === "yes") return "Play Area"
-
-  return "Playground"  
-}
-
-// Extract amenities from OSM tags - Enhanced
-function extractAmenities(tags: any): string[] {
-  if (!tags) return []
-
-  const amenities: string[] = []
-
-  // Enhanced equipment detection
-  const equipmentMapping = {
-    "swing": "Swings",
-    "slide": "Slides", 
-    "climbing_frame": "Climbing Frame",
-    "sandpit": "Sand Pit",
-    "sandbox": "Sand Pit",
-    "seesaw": "See-saw",
-    "roundabout": "Roundabout",
-    "springy": "Spring Riders",
-    "spinning": "Spinning Equipment",
-    "basketball_hoop": "Basketball Hoop",
-    "table_tennis": "Table Tennis",
-    "horizontal_bar": "Monkey Bars",
-    "parallel_bars": "Parallel Bars",
-    "zipline": "Zip Line",
-    "climbing_wall": "Climbing Wall",
-  }
-
-  // Check for specific equipment
-  Object.entries(equipmentMapping).forEach(([tag, displayName]) => {
-    if (tags[tag] === "yes" || tags[`playground:${tag}`] === "yes") {
-      amenities.push(displayName)
-    }
-  })
-
-  // Add general facility types
-  if (tags.leisure === "park") amenities.push("Park Setting")
-  if (tags.leisure === "recreation_ground") amenities.push("Recreation Ground")
-  if (tags.sport) amenities.push(tags.sport.charAt(0).toUpperCase() + tags.sport.slice(1))
-  if (tags.surface) amenities.push(`${tags.surface.charAt(0).toUpperCase() + tags.surface.slice(1)} Surface`)
-  
-  // Check for accessibility features
-  if (tags.wheelchair === "yes") amenities.push("Wheelchair Accessible")
-  if (tags["playground:baby"] === "yes") amenities.push("Baby Area")
-  if (tags["playground:toddler"] === "yes") amenities.push("Toddler Area")
-
-  return amenities
-}
-
-// Calculate distance between two points
 export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371 // Earth's radius in km
+  const R = 6371
   const dLat = ((lat2 - lat1) * Math.PI) / 180
   const dLon = ((lon2 - lon1) * Math.PI) / 180
   const a =
@@ -515,10 +570,8 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c
 }
 
-// Mock data for testing - Improved to be more realistic
+// Mock data functions (same as before)
 function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
-  console.log("🎭 Generating realistic mock playgrounds for testing...")
-
   return [
     {
       id: "mock-1",
@@ -527,82 +580,38 @@ function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
       lon: lon + 0.01,
       address: "Park Road",
       city: "Local Area",
-      amenities: ["Swings", "Slides", "Climbing Frame", "Sand Pit"],
+      amenities: ["Swings", "Slides", "Climbing Frame"],
+      source: 'mock'
     },
     {
-      id: "mock-2", 
-      name: "Recreation Ground Play Area",
+      id: "mock-2",
+      name: "Recreation Ground Play Area", 
       lat: lat - 0.01,
       lon: lon - 0.01,
       address: "Recreation Ground",
       city: "Local Area",
-      amenities: ["See-saw", "Spring Riders", "Basketball Hoop"],
-    },
-    {
-      id: "mock-3",
-      name: "Adventure Playground", 
-      lat: lat + 0.005,
-      lon: lon - 0.005,
-      address: "Adventure Street",
-      city: "Local Area",
-      amenities: ["Zip Line", "Climbing Wall", "Roundabout"],
-    },
+      amenities: ["See-saw", "Spring Riders"],
+      source: 'mock'
+    }
   ]
 }
 
 function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
-  console.log(`🎭 Generating realistic mock playgrounds for ${location}...`)
-
-  // Get realistic coordinates for major UK locations
-  const getLocationCoords = (loc: string) => {
-    const lower = loc.toLowerCase()
-    if (lower.includes('london')) return { lat: 51.5074, lon: -0.1278 }
-    if (lower.includes('manchester')) return { lat: 53.4808, lon: -2.2426 }
-    if (lower.includes('birmingham')) return { lat: 52.4862, lon: -1.8904 }
-    if (lower.includes('leeds')) return { lat: 53.8008, lon: -1.5491 }
-    if (lower.includes('liverpool')) return { lat: 53.4084, lon: -2.9916 }
-    if (lower.includes('bristol')) return { lat: 51.4545, lon: -2.5879 }
-    if (lower.includes('m20')) return { lat: 53.4351, lon: -2.2899 } // Didsbury area
-    return { lat: 52.4862, lon: -1.8904 } // Default to Birmingham
-  }
-
-  const coords = getLocationCoords(location)
-  const displayLocation = location.includes('M20') ? 'Didsbury, Manchester' : location
+  const coords = location.toLowerCase().includes('m20') 
+    ? { lat: 53.4351, lon: -2.2899 } // Didsbury area
+    : { lat: 51.5074, lon: -0.1278 } // London default
 
   return [
     {
       id: `mock-${location}-1`,
-      name: `${displayLocation} Community Playground`,
+      name: `${location} Community Playground`,
       lat: coords.lat + 0.008,
       lon: coords.lon + 0.012,
-      address: `High Street, ${displayLocation}`,
-      city: displayLocation,
-      amenities: ["Swings", "Slides", "Climbing Frame", "Sand Pit"],
-      surface: "bark_chips",
-      access: "yes"
-    },
-    {
-      id: `mock-${location}-2`,
-      name: `${displayLocation} Recreation Ground`,
-      lat: coords.lat - 0.007,
-      lon: coords.lon - 0.009,
-      address: `Recreation Road, ${displayLocation}`,
-      city: displayLocation,
-      amenities: ["See-saw", "Spring Riders", "Basketball Hoop", "Picnic Area"],
-      surface: "grass",
-      access: "yes"
-    },
-    {
-      id: `mock-${location}-3`,
-      name: `${displayLocation} Adventure Park`,
-      lat: coords.lat + 0.005,
-      lon: coords.lon - 0.008,
-      address: `Park Lane, ${displayLocation}`,
-      city: displayLocation,
-      amenities: ["Zip Line", "Climbing Wall", "Roundabout", "Toddler Area"],
-      surface: "rubber",
-      access: "yes"
-    },
+      address: `High Street, ${location}`,
+      city: location,
+      amenities: ["Swings", "Slides", "Climbing Frame"],
+      source: 'mock'
+    }
   ]
 }
 
