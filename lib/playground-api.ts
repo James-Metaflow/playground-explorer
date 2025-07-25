@@ -1,4 +1,4 @@
-// Enhanced UK Playground data fetching with Google Places API
+// Enhanced UK Playground data fetching with Google Places API - DEBUG VERSION
 
 export interface PlaygroundData {
   id: string
@@ -22,6 +22,14 @@ class GooglePlacesAPI {
 
   constructor() {
     this.apiKey = process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY || process.env.GOOGLE_PLACES_API_KEY || ''
+    console.log('🔑 DEBUG: API Key exists:', !!this.apiKey)
+    console.log('🔑 DEBUG: API Key first 10 chars:', this.apiKey?.substring(0, 10))
+    console.log('🔑 DEBUG: Environment check:', {
+      nextPublic: !!process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY,
+      regular: !!process.env.GOOGLE_PLACES_API_KEY,
+      nodeEnv: process.env.NODE_ENV
+    })
+    
     if (!this.apiKey) {
       console.warn('⚠️ Google Places API key not found. Using fallback data sources.')
     }
@@ -52,7 +60,9 @@ class GooglePlacesAPI {
 
       for (const searchTerm of searchTerms) {
         try {
+          console.log(`🔍 DEBUG: Trying nearby search with term: "${searchTerm}"`)
           const results = await this.performNearbySearch(lat, lon, radiusMeters, searchTerm)
+          console.log(`📊 DEBUG: "${searchTerm}" returned ${results.length} results`)
           allResults.push(...results)
           
           // Small delay between searches to respect rate limits
@@ -97,7 +107,9 @@ class GooglePlacesAPI {
 
       for (const query of searchQueries) {
         try {
+          console.log(`🔍 DEBUG: Trying text search with query: "${query}"`)
           const results = await this.performTextSearch(query)
+          console.log(`📊 DEBUG: "${query}" returned ${results.length} results`)
           allResults.push(...results)
           
           // Small delay between searches
@@ -130,14 +142,34 @@ class GooglePlacesAPI {
       key: this.apiKey
     })
 
+    console.log(`📡 DEBUG: Making nearby search request to: ${url}`)
+    console.log(`📡 DEBUG: Parameters:`, {
+      location: `${lat},${lon}`,
+      radius: radius.toString(),
+      keyword: keyword,
+      type: 'park',
+      key: this.apiKey.substring(0, 10) + '...'
+    })
+
     const response = await fetch(`${url}?${params}`)
     
+    console.log(`📡 DEBUG: Nearby search response status:`, response.status, response.ok)
+
     if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`❌ DEBUG: HTTP error response:`, errorText)
       throw new Error(`Google Places API error: ${response.status}`)
     }
 
     const data = await response.json()
     
+    console.log(`📊 DEBUG: Nearby search response:`, {
+      status: data.status,
+      resultsCount: data.results?.length || 0,
+      errorMessage: data.error_message,
+      firstResult: data.results?.[0]
+    })
+
     if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
       throw new Error(`Google Places API error: ${data.status} - ${data.error_message || 'Unknown error'}`)
     }
@@ -154,14 +186,28 @@ class GooglePlacesAPI {
       key: this.apiKey
     })
 
+    console.log(`📡 DEBUG: Making text search request to: ${url}`)
+    console.log(`📡 DEBUG: Query: "${query}", Region: uk, Key: ${this.apiKey.substring(0, 10)}...`)
+
     const response = await fetch(`${url}?${params}`)
     
+    console.log(`📡 DEBUG: Text search response status:`, response.status, response.ok)
+
     if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`❌ DEBUG: HTTP error response:`, errorText)
       throw new Error(`Google Places API error: ${response.status}`)
     }
 
     const data = await response.json()
     
+    console.log(`📊 DEBUG: Text search response:`, {
+      status: data.status,
+      resultsCount: data.results?.length || 0,
+      errorMessage: data.error_message,
+      firstResult: data.results?.[0]
+    })
+
     if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
       throw new Error(`Google Places API error: ${data.status} - ${data.error_message || 'Unknown error'}`)
     }
@@ -171,26 +217,41 @@ class GooglePlacesAPI {
 
   // Parse Google Places results into our format
   private parseGoogleResults(results: any[]): PlaygroundData[] {
-    return results
-      .filter(place => this.isPlaygroundRelevant(place))
-      .map(place => ({
-        id: `google-${place.place_id}`,
-        name: this.generatePlaygroundName(place),
-        lat: place.geometry.location.lat,
-        lon: place.geometry.location.lng,
-        address: place.vicinity || place.formatted_address,
-        city: this.extractCity(place),
-        rating: place.rating,
-        amenities: this.extractAmenities(place),
-        opening_hours: this.formatOpeningHours(place.opening_hours),
-        source: 'google' as const
-      }))
+    console.log(`🔄 DEBUG: Parsing ${results.length} Google results`)
+    
+    const parsed = results
+      .filter(place => {
+        const relevant = this.isPlaygroundRelevant(place)
+        console.log(`🔍 DEBUG: Place "${place.name}" relevant: ${relevant}`)
+        return relevant
+      })
+      .map(place => {
+        const parsed = {
+          id: `google-${place.place_id}`,
+          name: this.generatePlaygroundName(place),
+          lat: place.geometry.location.lat,
+          lon: place.geometry.location.lng,
+          address: place.vicinity || place.formatted_address,
+          city: this.extractCity(place),
+          rating: place.rating,
+          amenities: this.extractAmenities(place),
+          opening_hours: this.formatOpeningHours(place.opening_hours),
+          source: 'google' as const
+        }
+        console.log(`✅ DEBUG: Parsed playground:`, parsed)
+        return parsed
+      })
+
+    console.log(`✅ DEBUG: Successfully parsed ${parsed.length} playgrounds`)
+    return parsed
   }
 
   // Filter out non-playground results
   private isPlaygroundRelevant(place: any): boolean {
     const name = place.name.toLowerCase()
     const types = place.types || []
+    
+    console.log(`🔍 DEBUG: Checking relevance for "${place.name}", types:`, types)
     
     // Must contain playground-related keywords
     const playgroundKeywords = [
@@ -212,7 +273,10 @@ class GooglePlacesAPI {
       name.includes(keyword)
     )
 
-    return hasPlaygroundKeyword && !hasExcludeKeyword
+    const relevant = hasPlaygroundKeyword && !hasExcludeKeyword
+    console.log(`🔍 DEBUG: Has playground keyword: ${hasPlaygroundKeyword}, Has exclude keyword: ${hasExcludeKeyword}, Relevant: ${relevant}`)
+    
+    return relevant
   }
 
   // Generate meaningful playground names
@@ -344,29 +408,29 @@ function areDuplicates(playground1: PlaygroundData, playground2: PlaygroundData)
 
 // Enhanced main search function with Google Places as primary source
 export async function fetchPlaygroundsNearLocation(lat: number, lon: number, radiusKm = 10): Promise<PlaygroundData[]> {
-  console.log(`🎯 Searching playgrounds near ${lat}, ${lon} within ${radiusKm}km using hybrid approach`)
+  console.log(`🎯 DEBUG: Searching playgrounds near ${lat}, ${lon} within ${radiusKm}km using hybrid approach`)
 
   const allPlaygrounds: PlaygroundData[] = []
 
   // 1. Try Google Places first (best data quality)
   try {
-    console.log('🔍 Step 1: Searching Google Places...')
+    console.log('🔍 DEBUG: Step 1: Searching Google Places...')
     const googleResults = await googlePlacesAPI.searchNearbyPlaygrounds(lat, lon, radiusKm * 1000)
     allPlaygrounds.push(...googleResults)
-    console.log(`✅ Google Places found ${googleResults.length} playgrounds`)
+    console.log(`✅ DEBUG: Google Places found ${googleResults.length} playgrounds`)
   } catch (error) {
-    console.warn('⚠️ Google Places search failed:', error)
+    console.warn('⚠️ DEBUG: Google Places search failed:', error)
   }
 
   // 2. If we have good results from Google, we might not need other sources
   if (allPlaygrounds.length >= 5) {
-    console.log('🎉 Found sufficient results from Google Places, skipping other sources')
+    console.log('🎉 DEBUG: Found sufficient results from Google Places, skipping other sources')
     return allPlaygrounds.slice(0, 20) // Limit to 20 results
   }
 
   // 3. Supplement with OpenStreetMap data if needed
   try {
-    console.log('🔍 Step 2: Supplementing with OpenStreetMap...')
+    console.log('🔍 DEBUG: Step 2: Supplementing with OpenStreetMap...')
     const osmResults = await fetchFromOpenStreetMap(lat, lon, radiusKm)
     
     // Add OSM results that aren't duplicates
@@ -376,14 +440,14 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
         allPlaygrounds.push({ ...osmPlayground, source: 'osm' })
       }
     }
-    console.log(`✅ Added ${osmResults.length} unique OpenStreetMap results`)
+    console.log(`✅ DEBUG: Added ${osmResults.length} unique OpenStreetMap results`)
   } catch (error) {
-    console.warn('⚠️ OpenStreetMap search failed:', error)
+    console.warn('⚠️ DEBUG: OpenStreetMap search failed:', error)
   }
 
   // 4. Return results or mock data if nothing found
   if (allPlaygrounds.length === 0) {
-    console.log('🎭 No real playgrounds found, returning test data')
+    console.log('🎭 DEBUG: No real playgrounds found, returning test data')
     return getMockPlaygrounds(lat, lon)
   }
 
@@ -401,54 +465,67 @@ export async function fetchPlaygroundsNearLocation(lat: number, lon: number, rad
     return distA - distB
   })
 
-  console.log(`🎯 Returning ${sortedPlaygrounds.length} total playgrounds`)
+  console.log(`🎯 DEBUG: Returning ${sortedPlaygrounds.length} total playgrounds`)
   return sortedPlaygrounds.slice(0, 20) // Limit to 20 results
 }
 
-// Enhanced location search with Google Places
+// Enhanced location search with Google Places - WITH EXTENSIVE DEBUG
 export async function searchPlaygroundsByLocation(location: string): Promise<PlaygroundData[]> {
-  console.log(`🎯 Searching playgrounds for location: "${location}" using hybrid approach`)
+  console.log(`🎯 DEBUG: Searching playgrounds for location: "${location}" using hybrid approach`)
+  
+  // Check if API key is available
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY || process.env.GOOGLE_PLACES_API_KEY
+  console.log('🔑 DEBUG: API Key exists:', !!apiKey)
+  console.log('🔑 DEBUG: API Key first 10 chars:', apiKey?.substring(0, 10))
+  console.log('🔑 DEBUG: All env vars:', Object.keys(process.env).filter(key => key.includes('GOOGLE')))
 
   const allPlaygrounds: PlaygroundData[] = []
 
   // 1. Try Google Places text search first
   try {
-    console.log('🔍 Step 1: Google Places text search...')
+    console.log('🔍 DEBUG: Step 1: Google Places text search...')
     const googleResults = await googlePlacesAPI.searchByLocation(location)
     allPlaygrounds.push(...googleResults)
-    console.log(`✅ Google Places found ${googleResults.length} playgrounds`)
+    console.log(`✅ DEBUG: Google Places found ${googleResults.length} playgrounds`)
   } catch (error) {
-    console.warn('⚠️ Google Places text search failed:', error)
+    console.warn('⚠️ DEBUG: Google Places text search failed:', error)
   }
 
   // 2. If Google found good results, we might not need geocoding + nearby search
   if (allPlaygrounds.length >= 3) {
-    console.log('🎉 Found sufficient results from Google text search')
+    console.log('🎉 DEBUG: Found sufficient results from Google text search')
     return allPlaygrounds.slice(0, 20)
   }
 
   // 3. Fall back to geocoding + nearby search
   try {
-    console.log('🔍 Step 2: Geocoding location for nearby search...')
+    console.log('🔍 DEBUG: Step 2: Geocoding location for nearby search...')
     
     // Geocode the location
     const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}&countrycodes=gb&limit=1&addressdetails=1`
+    console.log('📡 DEBUG: Geocoding URL:', geocodeUrl)
+    
     const geocodeResponse = await fetch(geocodeUrl, {
       headers: { "User-Agent": "PlaygroundExplorer/1.0" }
     })
 
+    console.log('📡 DEBUG: Geocoding response status:', geocodeResponse.status, geocodeResponse.ok)
+
     if (geocodeResponse.ok) {
       const geocodeData = await geocodeResponse.json()
+      console.log('🌍 DEBUG: Geocoding results:', geocodeData)
       
       if (geocodeData && geocodeData.length > 0) {
         const { lat, lon } = geocodeData[0]
         const numLat = parseFloat(lat)
         const numLon = parseFloat(lon)
         
-        console.log(`✅ Geocoded "${location}" to ${numLat}, ${numLon}`)
+        console.log(`✅ DEBUG: Geocoded "${location}" to ${numLat}, ${numLon}`)
         
         // Search around this location
+        console.log('🔍 DEBUG: Starting nearby search with geocoded coordinates...')
         const nearbyResults = await fetchPlaygroundsNearLocation(numLat, numLon, 15)
+        console.log(`📊 DEBUG: Nearby search returned ${nearbyResults.length} results`)
         
         // Add non-duplicate results
         for (const playground of nearbyResults) {
@@ -460,21 +537,23 @@ export async function searchPlaygroundsByLocation(location: string): Promise<Pla
       }
     }
   } catch (error) {
-    console.warn('⚠️ Geocoding fallback failed:', error)
+    console.warn('⚠️ DEBUG: Geocoding fallback failed:', error)
   }
 
   // 4. Return results or mock data
   if (allPlaygrounds.length === 0) {
-    console.log('🎭 No real playgrounds found, returning test data')
+    console.log('🎭 DEBUG: No real playgrounds found, returning test data')
     return getMockPlaygroundsForLocation(location)
   }
 
-  console.log(`🎯 Returning ${allPlaygrounds.length} total playgrounds for "${location}"`)
+  console.log(`🎯 DEBUG: Returning ${allPlaygrounds.length} total playgrounds for "${location}"`)
   return allPlaygrounds.slice(0, 20)
 }
 
 // Simplified OpenStreetMap fetcher (as fallback)
 async function fetchFromOpenStreetMap(lat: number, lon: number, radiusKm: number): Promise<PlaygroundData[]> {
+  console.log(`🔍 DEBUG: OpenStreetMap search near ${lat}, ${lon} within ${radiusKm}km`)
+  
   const query = `
     [out:json][timeout:15];
     (
@@ -493,12 +572,16 @@ async function fetchFromOpenStreetMap(lat: number, lon: number, radiusKm: number
       body: `data=${encodeURIComponent(query)}`,
     })
 
+    console.log(`📡 DEBUG: OpenStreetMap response status:`, response.status, response.ok)
+
     if (!response.ok) return []
 
     const data = await response.json()
+    console.log(`📊 DEBUG: OpenStreetMap returned ${data.elements?.length || 0} elements`)
+    
     if (!data.elements) return []
 
-    return data.elements
+    const results = data.elements
       .filter((element: any) => element.lat && element.lon)
       .map((element: any) => ({
         id: `osm-${element.type}-${element.id}`,
@@ -511,8 +594,11 @@ async function fetchFromOpenStreetMap(lat: number, lon: number, radiusKm: number
         source: 'osm' as const
       }))
 
+    console.log(`✅ DEBUG: OpenStreetMap processed ${results.length} playgrounds`)
+    return results
+
   } catch (error) {
-    console.error('❌ OpenStreetMap fallback failed:', error)
+    console.error('❌ DEBUG: OpenStreetMap fallback failed:', error)
     return []
   }
 }
@@ -572,6 +658,7 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
 
 // Mock data functions (same as before)
 function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
+  console.log('🎭 DEBUG: Generating mock playgrounds for nearby search')
   return [
     {
       id: "mock-1",
@@ -597,6 +684,8 @@ function getMockPlaygrounds(lat: number, lon: number): PlaygroundData[] {
 }
 
 function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
+  console.log(`🎭 DEBUG: Generating mock playgrounds for location: ${location}`)
+  
   const coords = location.toLowerCase().includes('m20') 
     ? { lat: 53.4351, lon: -2.2899 } // Didsbury area
     : { lat: 51.5074, lon: -0.1278 } // London default
@@ -614,7 +703,3 @@ function getMockPlaygroundsForLocation(location: string): PlaygroundData[] {
     }
   ]
 }
-
-
-
-
