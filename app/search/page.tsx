@@ -46,6 +46,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
+  const [locationLoading, setLocationLoading] = useState(false)
   const [mapCenter, setMapCenter] = useState<[number, number]>([51.5074, -0.1278]) // Default to London
   const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
@@ -73,25 +74,10 @@ export default function SearchPage() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Get user's location on component mount
+  // Load database playgrounds on mount (but don't search automatically)
   useEffect(() => {
     console.log("🚀 SearchPage component mounted")
     loadDatabasePlaygrounds()
-
-    getCurrentLocation()
-      .then(({ lat, lon }) => {
-        console.log("✅ Got user location:", lat, lon)
-        setUserLocation([lat, lon])
-        setMapCenter([lat, lon])
-        // Automatically search for nearby playgrounds
-        handleNearbySearch(lat, lon)
-      })
-      .catch((error) => {
-        console.log("⚠️ Could not get user location:", error)
-        // Default to London and search there
-        console.log("🔄 Falling back to London search...")
-        handleLocationSearch("London, UK")
-      })
   }, [])
 
   const loadDatabasePlaygrounds = async () => {
@@ -238,14 +224,30 @@ export default function SearchPage() {
     }
   }
 
-  const handleNearbySearch = async (lat?: number, lon?: number) => {
-    const searchLat = lat || userLocation?.[0]
-    const searchLon = lon || userLocation?.[1]
+  const handleNearbySearch = async () => {
+    // First get user location if we don't have it
+    let searchLat = userLocation?.[0]
+    let searchLon = userLocation?.[1]
 
     if (!searchLat || !searchLon) {
-      console.log("❌ No location available for nearby search")
-      setError("Location not available. Please search by city or postcode.")
-      return
+      console.log("🔍 Getting user location for nearby search...")
+      setLocationLoading(true)
+      
+      try {
+        const location = await getCurrentLocation()
+        searchLat = location.lat
+        searchLon = location.lon
+        setUserLocation([searchLat, searchLon])
+        setMapCenter([searchLat, searchLon])
+        console.log("✅ Got user location:", searchLat, searchLon)
+      } catch (error) {
+        console.log("❌ Could not get user location:", error)
+        setError("Could not access your location. Please search by city or postcode instead.")
+        setLocationLoading(false)
+        return
+      } finally {
+        setLocationLoading(false)
+      }
     }
 
     console.log(`🔍 Starting nearby search at: ${searchLat}, ${searchLon}`)
@@ -264,7 +266,7 @@ export default function SearchPage() {
       setPlaygrounds(combinedResults)
 
       if (combinedResults.length === 0) {
-        setError("No playgrounds found nearby. Try expanding your search area.")
+        setError("No playgrounds found nearby. Try expanding your search area or search by city name.")
       }
     } catch (error) {
       console.error("❌ Nearby search failed:", error)
@@ -295,6 +297,7 @@ export default function SearchPage() {
     console.log(`🔍 Starting location search for: "${location}"`)
     setLoading(true)
     setError(null)
+    setSearchQuery(location) // Update search input
 
     try {
       const [externalResults, dbResults] = await Promise.all([
@@ -408,19 +411,23 @@ export default function SearchPage() {
                 <div className="flex gap-2">
                   <Button
                     onClick={handleSearch}
-                    disabled={loading || !searchQuery.trim()}
+                    disabled={loading || locationLoading || !searchQuery.trim()}
                     className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Search
                   </Button>
                   <Button
-                    onClick={() => handleNearbySearch()}
-                    disabled={loading}
+                    onClick={handleNearbySearch}
+                    disabled={loading || locationLoading}
                     variant="outline"
                     className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                   >
-                    <Navigation className="w-4 h-4 mr-2" />
+                    {locationLoading ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Navigation className="w-4 h-4 mr-2" />
+                    )}
                     Near Me
                   </Button>
                 </div>
@@ -432,7 +439,7 @@ export default function SearchPage() {
                   <Button
                     key={city}
                     onClick={() => handleLocationSearch(city)}
-                    disabled={loading}
+                    disabled={loading || locationLoading}
                     variant="outline"
                     size="sm"
                     className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
@@ -475,7 +482,7 @@ export default function SearchPage() {
                   <Search className="w-16 h-16 text-gray-300 mx-auto mb-4" />
                   <h3 className="text-xl font-semibold mb-2">Start Your Search</h3>
                   <p className="text-gray-600 mb-4">
-                    Search for a UK location or use "Near Me" to find playgrounds around you.
+                    Enter a UK location in the search box above or use "Near Me" to find playgrounds around you.
                   </p>
                   <div className="flex gap-2 justify-center">
                     <Button
