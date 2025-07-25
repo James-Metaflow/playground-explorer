@@ -64,6 +64,16 @@ const defaultRatings: Rating[] = [
   { category: "Overall Fun Factor", score: 0, color: "#8b5cf6" },
 ]
 
+// Hardcoded category mapping from your database
+const CATEGORY_ID_MAPPING: {[key: string]: string} = {
+  "Safety": "8290d599-d0ef-475b-8f1e-43e8b2a7477d",
+  "Equipment Quality": "89c513ce-f5bd-40ad-97ab-a69f6b6d9306", 
+  "Cleanliness": "60380f84-dac7-4485-b7af-b8322d083185",
+  "Age Appropriateness": "6a8c6cda-3f6d-4fb4-8ec7-9c0ae130a667",
+  "Accessibility": "b7c3ba85-3ea0-4ae0-9531-8bc0d6dea635",
+  "Overall Fun Factor": "9d2e07e3-f0d5-4c2c-9302-0e94566d02c6"
+}
+
 export default function PlaygroundDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -122,6 +132,7 @@ export default function PlaygroundDetailPage() {
   }, [user, playground])
 
   const loadPlaygroundData = async (id: string) => {
+    console.log(`🔍 DEBUG: Loading playground data for ID: ${id}`)
     setLoading(true)
     setError(null)
 
@@ -134,6 +145,8 @@ export default function PlaygroundDetailPage() {
         .single()
 
       if (dbData && !dbError) {
+        console.log('✅ DEBUG: Found playground in database:', dbData)
+        
         // Load ratings for this playground
         const explorer = await loadPlaygroundRatings(id)
         setPlayground({
@@ -156,10 +169,12 @@ export default function PlaygroundDetailPage() {
           source: 'database'
         })
       } else {
+        console.log('⚠️ DEBUG: Playground not found in database, trying Google Places...')
         // If not in database, try to fetch from Google Places API
         await loadFromGooglePlaces(id)
       }
     } catch (error) {
+      console.error('❌ DEBUG: Error loading playground:', error)
       setError('Failed to load playground details. Please try again.')
     } finally {
       setLoading(false)
@@ -174,6 +189,8 @@ export default function PlaygroundDetailPage() {
         const data = await response.json()
         if (data.result) {
           const place = data.result
+          console.log('✅ DEBUG: Found Google Places data:', place)
+          
           // Load explorer/user ratings for this Google place
           const explorer = await loadPlaygroundRatings(placeId)
           setPlayground({
@@ -201,6 +218,8 @@ export default function PlaygroundDetailPage() {
         throw new Error('Failed to fetch from Google Places')
       }
     } catch (error) {
+      console.error('❌ DEBUG: Failed to load from Google Places:', error)
+      
       // Fall back to mock data with the provided ID
       setPlayground({
         id: playgroundId,
@@ -241,26 +260,55 @@ export default function PlaygroundDetailPage() {
     return facilities
   }
 
-  // Returns { rating, totalRatings }
+  // FIXED: Returns { rating, totalRatings } using correct schema
   const loadPlaygroundRatings = async (playgroundId: string) => {
     try {
+      console.log('🔍 DEBUG: Loading ratings for playground:', playgroundId)
+      
+      // Clean the playground ID 
+      let cleanPlaygroundId = playgroundId
+      if (cleanPlaygroundId.startsWith('db-')) {
+        cleanPlaygroundId = cleanPlaygroundId.replace('db-', '')
+      } else if (cleanPlaygroundId.startsWith('google-')) {
+        cleanPlaygroundId = cleanPlaygroundId.replace('google-', '')
+      } else if (cleanPlaygroundId.startsWith('osm-')) {
+        cleanPlaygroundId = cleanPlaygroundId.replace('osm-', '')
+      }
+
+      console.log('🔍 DEBUG: Looking for ratings with playground_id:', cleanPlaygroundId)
+
       const { data, error } = await supabase
         .from('ratings')
-        .select('category, score')
-        .eq('playground_id', playgroundId)
+        .select(`
+          category_id,
+          score,
+          rating_categories!inner (
+            name
+          )
+        `)
+        .eq('playground_id', cleanPlaygroundId)
 
       if (error) {
+        console.error('❌ DEBUG: Error loading ratings:', error)
         return { rating: undefined, totalRatings: undefined }
       }
 
-      // Calculate average ratings by category
+      console.log('📊 DEBUG: Loaded ratings data:', data)
+
+      // Calculate average ratings by category name
       const ratingMap: {[key: string]: number[]} = {}
+      
       data?.forEach(rating => {
-        if (!ratingMap[rating.category]) {
-          ratingMap[rating.category] = []
+        const categoryName = (rating.rating_categories as any)?.name
+        if (categoryName) {
+          if (!ratingMap[categoryName]) {
+            ratingMap[categoryName] = []
+          }
+          ratingMap[categoryName].push(rating.score)
         }
-        ratingMap[rating.category].push(rating.score)
       })
+
+      console.log('📊 DEBUG: Rating map:', ratingMap)
 
       // Update ratings with averages
       const updatedRatings = defaultRatings.map(defaultRating => {
@@ -268,6 +316,7 @@ export default function PlaygroundDetailPage() {
         const average = scores.length > 0 
           ? scores.reduce((sum, score) => sum + score, 0) / scores.length 
           : 0
+        
         return {
           ...defaultRating,
           score: average
@@ -277,14 +326,21 @@ export default function PlaygroundDetailPage() {
       setRatings(updatedRatings)
 
       // Calculate overall rating
-      const overallScore = updatedRatings.reduce((sum, rating) => sum + rating.score, 0) / updatedRatings.length
+      const ratingsWithScores = updatedRatings.filter(r => r.score > 0)
+      const overallScore = ratingsWithScores.length > 0
+        ? ratingsWithScores.reduce((sum, rating) => sum + rating.score, 0) / ratingsWithScores.length 
+        : 0
       const totalRatings = Object.values(ratingMap).reduce((sum, scores) => sum + scores.length, 0)
+
+      console.log('✅ DEBUG: Updated ratings:', updatedRatings)
+      console.log('📊 DEBUG: Overall score:', overallScore, 'Total ratings:', totalRatings)
 
       return {
         rating: overallScore > 0 ? overallScore : undefined,
         totalRatings: totalRatings > 0 ? totalRatings : undefined
       }
     } catch (error) {
+      console.error('❌ DEBUG: Error loading playground ratings:', error)
       return { rating: undefined, totalRatings: undefined }
     }
   }
@@ -299,7 +355,9 @@ export default function PlaygroundDetailPage() {
         .eq('playground_id', playground.id)
         .single()
       setIsFavorite(!error && !!data)
-    } catch (error) {}
+    } catch (error) {
+      console.error('Error loading favorite status:', error)
+    }
   }
 
   const loadUserPhotos = async () => {
@@ -313,7 +371,9 @@ export default function PlaygroundDetailPage() {
       if (data && !error) {
         setUserPhotos(data.map(photo => photo.photo_url))
       }
-    } catch (error) {}
+    } catch (error) {
+      console.error('Error loading user photos:', error)
+    }
   }
 
   const toggleFavorite = async () => {
@@ -323,51 +383,178 @@ export default function PlaygroundDetailPage() {
     }
     try {
       if (isFavorite) {
-        await supabase
+        const { error } = await supabase
           .from('user_favorites')
           .delete()
           .eq('user_id', user.id)
           .eq('playground_id', playground.id)
-        setIsFavorite(false)
+        if (!error) setIsFavorite(false)
       } else {
-        await supabase
+        const { error } = await supabase
           .from('user_favorites')
           .insert({
             user_id: user.id,
             playground_id: playground.id
           })
-        setIsFavorite(true)
+        if (!error) setIsFavorite(true)
       }
-    } catch (error) {}
+    } catch (error) {
+      console.error('Error toggling favorite:', error)
+    }
   }
 
+  // FIXED: Rating submission using correct schema and category IDs
   const handleRatingSubmit = async () => {
+    console.log('🎯 DEBUG: Starting rating submission...')
+    
     if (!user || !playground) {
+      console.log('❌ DEBUG: Missing user or playground:', { user: !!user, playground: !!playground })
       router.push('/auth/signin')
       return
     }
+
+    console.log('🔍 DEBUG: Rating submission data:', {
+      userId: user.id,
+      playgroundId: playground.id,
+      userRatings: userRatings,
+      userReview: userReview,
+      ratingsCount: Object.keys(userRatings).length
+    })
+
+    if (Object.keys(userRatings).length === 0) {
+      console.log('❌ DEBUG: No ratings provided')
+      alert('Please provide at least one rating before submitting.')
+      return
+    }
+
     try {
-      // Submit ratings for each category
-      const ratingPromises = Object.entries(userRatings).map(([category, score]) => 
-        supabase
-          .from('ratings')
-          .upsert({
-            user_id: user.id,
-            playground_id: playground.id,
-            category,
-            score,
-            review: userReview || null
-          })
-      )
-      await Promise.all(ratingPromises)
+      // Clean the playground ID
+      let cleanPlaygroundId = playground.id
+      
+      if (playground.source === 'database') {
+        if (cleanPlaygroundId.startsWith('db-')) {
+          cleanPlaygroundId = cleanPlaygroundId.replace('db-', '')
+        }
+      } else {
+        // For external playgrounds, we can't rate them yet
+        console.log('❌ DEBUG: Cannot rate external playground')
+        alert('This playground is from an external source (Google Places/OpenStreetMap) and cannot be rated yet. Please try rating a user-added playground.')
+        return
+      }
+
+      // Validate playground ID is a UUID
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      if (!uuidRegex.test(cleanPlaygroundId)) {
+        console.error('❌ DEBUG: Invalid playground ID format:', cleanPlaygroundId)
+        alert('Invalid playground ID format. This playground cannot be rated.')
+        return
+      }
+
+      console.log('✅ DEBUG: Using playground ID:', cleanPlaygroundId)
+      
+      // Prepare rating records using hardcoded category IDs
+      const ratingRecords = Object.entries(userRatings).map(([categoryName, score]) => {
+        const categoryId = CATEGORY_ID_MAPPING[categoryName]
+        
+        if (!categoryId) {
+          throw new Error(`Unknown category: ${categoryName}`)
+        }
+        
+        const record = {
+          user_id: user.id,
+          playground_id: cleanPlaygroundId,
+          category_id: categoryId,
+          score: Number(score),
+          review: userReview.trim() || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+        console.log('📋 DEBUG: Rating record:', record)
+        return record
+      })
+
+      console.log('📤 DEBUG: Submitting ratings to database...')
+      
+      // Submit each rating individually for better error handling
+      const results = []
+      for (const record of ratingRecords) {
+        console.log(`📤 DEBUG: Submitting rating for category ID ${record.category_id}...`)
+        
+        try {
+          const { data, error } = await supabase
+            .from('ratings')
+            .upsert(record, {
+              onConflict: 'user_id,playground_id,category_id'
+            })
+            .select()
+          
+          if (error) {
+            console.error(`❌ DEBUG: Error submitting rating:`, error)
+            console.error(`❌ DEBUG: Error details:`, {
+              message: error.message,
+              details: error.details,
+              hint: error.hint,
+              code: error.code
+            })
+            
+            // Handle specific errors
+            if (error.code === '23503') { // Foreign key violation
+              if (error.message.includes('playground_id')) {
+                throw new Error(`Playground not found in database (ID: ${record.playground_id}).`)
+              } else if (error.message.includes('category_id')) {
+                throw new Error(`Rating category not found (ID: ${record.category_id}).`)
+              } else if (error.message.includes('user_id')) {
+                throw new Error(`User not found. Please sign in again.`)
+              }
+            } else if (error.code === '23505') { // Unique violation
+              console.log(`ℹ️ DEBUG: Updating existing rating for category ${record.category_id}`)
+              // This is actually expected for upsert, continue
+            }
+            
+            if (error.code !== '23505') { // Don't throw for unique violations in upsert
+              throw error
+            }
+          }
+          
+          console.log(`✅ DEBUG: Successfully submitted rating:`, data)
+          results.push(data)
+          
+        } catch (individualError) {
+          console.error(`❌ DEBUG: Individual rating submission failed:`, individualError)
+          throw individualError
+        }
+      }
+
+      console.log('✅ DEBUG: All ratings submitted successfully:', results)
+
       // Reload ratings
-      await loadPlaygroundRatings(playground.id)
+      console.log('🔄 DEBUG: Reloading playground ratings...')
+      const updatedRatings = await loadPlaygroundRatings(playground.id)
+      
+      // Update playground with new ratings
+      setPlayground({
+        ...playground,
+        explorerRating: updatedRatings.rating,
+        explorerTotalRatings: updatedRatings.totalRatings
+      })
+      
+      // Reset form
       setIsRatingDialogOpen(false)
       setUserRatings({})
       setUserReview("")
+
+      console.log('🎉 DEBUG: Rating submission completed successfully!')
       alert('Thank you for your rating!')
+
     } catch (error) {
-      alert('Failed to submit rating. Please try again.')
+      console.error('❌ DEBUG: Rating submission failed:', error)
+      
+      let errorMessage = 'Failed to submit rating. '
+      if (error instanceof Error) {
+        errorMessage = error.message
+      }
+      
+      alert(errorMessage)
     }
   }
 
@@ -407,6 +594,7 @@ export default function PlaygroundDetailPage() {
       const validUrls = uploadedUrls.filter(url => url) as string[]
       setUserPhotos(prev => [...prev, ...validUrls])
     } catch (error) {
+      console.error('Error uploading photos:', error)
       alert('Failed to upload photos. Please try again.')
     }
   }
@@ -466,7 +654,6 @@ export default function PlaygroundDetailPage() {
     )
   }
 
-  // --- UI with dual ratings ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-yellow-100 via-pink-50 to-blue-100">
       {/* Header */}
@@ -710,9 +897,224 @@ export default function PlaygroundDetailPage() {
             </div>
           </TabsContent>
 
-          {/* ...rest of the file remains unchanged... */}
-          {/* (Photos, Info, Ratings tabs, etc.) */}
-          {/* You can keep your existing code for these sections. */}
+          <TabsContent value="ratings" className="space-y-6">
+            <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+              <CardHeader>
+                <CardTitle>Rating Breakdown</CardTitle>
+                <CardDescription>See how this playground scores across different categories</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {ratings.some(r => r.score > 0) ? (
+                  <ChartContainer
+                    config={{
+                      score: {
+                        label: "Score",
+                        color: "hsl(var(--chart-1))",
+                      },
+                    }}
+                    className="h-80"
+                  >
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="category" angle={-45} textAnchor="end" height={100} fontSize={12} />
+                        <YAxis domain={[0, 5]} />
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        <Bar dataKey="score" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </ChartContainer>
+                ) : (
+                  <div className="text-center py-8">
+                    <Star className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-gray-500">No ratings yet</p>
+                    <p className="text-sm text-gray-400">Be the first to rate this playground!</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-4">
+              {ratings.map((rating) => (
+                <Card key={rating.category} className="bg-white/80 backdrop-blur-sm border-orange-200">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium">{rating.category}</span>
+                      <span className="font-bold text-lg">
+                        {rating.score > 0 ? `${rating.score.toFixed(1)}/5.0` : 'Not rated'}
+                      </span>
+                    </div>
+                    <Progress value={rating.score * 20} className="h-2" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="photos" className="space-y-6">
+            <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-purple-500" />
+                  My Private Photos
+                </CardTitle>
+                <CardDescription>
+                  Upload and manage your personal photos from this playground visit. These photos are private and only
+                  visible to you.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {user ? (
+                  <div className="space-y-4">
+                    <div className="border-2 border-dashed border-orange-300 rounded-lg p-8 text-center">
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={handlePhotoUpload}
+                        className="hidden"
+                        id="photo-upload"
+                      />
+                      <label htmlFor="photo-upload" className="cursor-pointer">
+                        <Upload className="w-12 h-12 text-orange-400 mx-auto mb-4" />
+                        <p className="text-lg font-medium text-gray-700 mb-2">Upload Your Photos</p>
+                        <p className="text-gray-500">Click to select photos from your visit</p>
+                      </label>
+                    </div>
+
+                    {userPhotos.length > 0 && (
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {userPhotos.map((photo, index) => (
+                          <div key={index} className="relative group">
+                            <img
+                              src={photo}
+                              alt={`Playground photo ${index + 1}`}
+                              className="w-full h-32 object-cover rounded-lg"
+                            />
+                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                              <Button 
+                                size="sm" 
+                                variant="destructive"
+                                onClick={async () => {
+                                  try {
+                                    await supabase
+                                      .from('user_photos')
+                                      .delete()
+                                      .eq('user_id', user.id)
+                                      .eq('photo_url', photo)
+                                    
+                                    setUserPhotos(prev => prev.filter((_, i) => i !== index))
+                                  } catch (error) {
+                                    console.error('Error removing photo:', error)
+                                  }
+                                }}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {userPhotos.length === 0 && (
+                      <div className="text-center py-8">
+                        <Camera className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                        <p className="text-gray-500">No photos uploaded yet</p>
+                        <p className="text-sm text-gray-400">Start building your playground memory collection!</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <Camera className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-gray-600 mb-4">Sign in to upload and manage your playground photos</p>
+                    <Button 
+                      onClick={() => router.push('/auth/signin')}
+                      className="bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600"
+                    >
+                      Sign In to Upload Photos
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="info" className="space-y-6">
+            <div className="grid md:grid-cols-2 gap-6">
+              <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+                <CardHeader>
+                  <CardTitle>Opening Hours</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-lg font-medium">{playground.opening_hours || 'Hours not available'}</p>
+                  {playground.opening_hours && playground.opening_hours !== 'Unknown' && (
+                    <p className="text-sm text-gray-600 mt-2">Open daily, weather permitting</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
+                <CardHeader>
+                  <CardTitle>Facilities</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {playground.facilities && playground.facilities.length > 0 ? (
+                      playground.facilities.map((facility) => (
+                        <div key={facility} className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                          <span>{facility}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-gray-500">No facility information available</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white/80 backdrop-blur-sm border-orange-200 md:col-span-2">
+                <CardHeader>
+                  <CardTitle>Location & Accessibility</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <h4 className="font-medium mb-2">Address</h4>
+                      <p className="text-gray-600">{playground.location}</p>
+                      {playground.lat && playground.lon && (
+                        <p className="text-sm text-gray-500 mt-1">
+                          Coordinates: {playground.lat.toFixed(4)}, {playground.lon.toFixed(4)}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="font-medium mb-2">Accessibility</h4>
+                      <p className="text-gray-600">{playground.accessibility || 'Accessibility information not available'}</p>
+                    </div>
+                  </div>
+                  {playground.source === 'mock' && (
+                    <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <p className="text-sm text-yellow-800">
+                        <strong>Help improve this listing:</strong> This playground has limited information. 
+                        You can help by adding ratings, photos, and reviews to make it more useful for other families!
+                      </p>
+                    </div>
+                  )}
+                  {playground.source === 'google' && (
+                    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-800">
+                        <strong>External playground:</strong> This playground data comes from Google Places. 
+                        You can rate it to help other PlaygroundExplorer users, but it cannot be edited in our database.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
         </Tabs>
 
         {/* Back to Search Button */}
