@@ -5,10 +5,10 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { MapPin, Star, Camera, Trophy, Search, Plus, User, Menu, X } from "lucide-react"
+import { MapPin, Star, Camera, Trophy, Search, Pencil, User, Menu, X } from "lucide-react"
 import AuthButton from "@/components/auth-button"
 import { supabase } from "@/lib/supabase"
-import type { User } from "@supabase/supabase-js"
+import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 interface TopPlayground {
   id: string
@@ -20,7 +20,7 @@ interface TopPlayground {
 
 export default function HomePage() {
   const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<SupabaseUser | null>(null)
   const [topPlaygrounds, setTopPlaygrounds] = useState<TopPlayground[]>([])
   const [loading, setLoading] = useState(true)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -116,12 +116,9 @@ export default function HomePage() {
     router.push('/search')
   }
 
-  const handleAddPlaygroundClick = () => {
-    if (!user) {
-      router.push('/auth/signin?redirect=/add-playground')
-    } else {
-      router.push('/add-playground')
-    }
+  // New: Rate a Playground flow goes to /search (user finds then rates)
+  const handleRatePlaygroundClick = () => {
+    router.push('/search?tab=rating')
   }
 
   const handleGetStarted = () => {
@@ -156,9 +153,13 @@ export default function HomePage() {
               <Link href="/search" className="text-gray-700 hover:text-orange-500 font-medium transition-colors">
                 Search
               </Link>
-              <Link href="/add-playground" className="text-gray-700 hover:text-orange-500 font-medium transition-colors">
-                Add Playground
-              </Link>
+              <Button
+                variant="ghost"
+                className="text-gray-700 hover:text-orange-500 font-medium transition-colors px-0"
+                onClick={handleRatePlaygroundClick}
+              >
+                Rate a Playground
+              </Button>
               {user && (
                 <Link href="/profile" className="text-gray-700 hover:text-orange-500 font-medium transition-colors">
                   My Profile
@@ -197,13 +198,15 @@ export default function HomePage() {
                 >
                   Search
                 </Link>
-                <Link 
-                  href="/add-playground" 
-                  className="text-gray-700 hover:text-orange-500 font-medium px-2 py-1"
-                  onClick={() => setMobileMenuOpen(false)}
+                <button
+                  className="text-gray-700 hover:text-orange-500 font-medium px-2 py-1 text-left"
+                  onClick={() => {
+                    handleRatePlaygroundClick()
+                    setMobileMenuOpen(false)
+                  }}
                 >
-                  Add Playground
-                </Link>
+                  Rate a Playground
+                </button>
                 {user && (
                   <Link 
                     href="/profile" 
@@ -256,11 +259,11 @@ export default function HomePage() {
             <Button
               size="lg"
               variant="outline"
-              onClick={handleAddPlaygroundClick}
+              onClick={handleRatePlaygroundClick}
               className="border-2 border-orange-300 text-orange-600 hover:bg-orange-50 text-lg px-8 py-4 bg-transparent"
             >
-              <Plus className="w-5 h-5 mr-2" />
-              Add a Playground
+              <Pencil className="w-5 h-5 mr-2" />
+              Rate a Playground
             </Button>
           </div>
         </div>
@@ -285,16 +288,16 @@ export default function HomePage() {
           </Card>
 
           <Card className="bg-white/70 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow cursor-pointer"
-                onClick={() => user ? router.push('/profile') : handleSignIn()}>
+                onClick={handleRatePlaygroundClick}>
             <CardHeader className="text-center">
               <div className="w-16 h-16 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Star className="w-8 h-8 text-white" />
+                <Pencil className="w-8 h-8 text-white" />
               </div>
-              <CardTitle className="text-green-600">Rate & Review</CardTitle>
+              <CardTitle className="text-green-600">Rate a Playground</CardTitle>
             </CardHeader>
             <CardContent>
               <CardDescription className="text-center">
-                Create custom rating categories and share your playground experiences
+                Share your playground experiences and help others choose the best spots
               </CardDescription>
             </CardContent>
           </Card>
