@@ -318,7 +318,7 @@ export default function HomePage() {
           </Card>
 
           <Card className="bg-white/70 backdrop-blur-sm border-orange-200 hover:shadow-lg transition-shadow cursor-pointer"
-                onClick={() => router.push('/top-playgrounds')}
+                onClick={() => router.push('/top-playgrounds')}>
             <CardHeader className="text-center">
               <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Trophy className="w-8 h-8 text-white" />
