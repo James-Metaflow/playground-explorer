@@ -75,6 +75,15 @@ export default function AddPlaygroundPage() {
       }
     })
 
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+      if (!session?.user) {
+        router.push('/auth/signin?redirect=/add-playground')
+      }
+    })
+
     return () => subscription.unsubscribe()
   }, [router])
 
@@ -669,13 +678,4 @@ export default function AddPlaygroundPage() {
       </div>
     </div>
   )
-}signin?redirect=/add-playground')
-      }
-    })
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-      if (!session?.user) {
-        router.push('/auth/
+}

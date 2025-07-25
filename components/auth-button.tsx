@@ -202,6 +202,23 @@ export default function AuthButton() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="pl-9"
+                  required={isSignUp}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="pl-9"
                 required
               />
             </div>
@@ -268,20 +285,3 @@ export default function AuthButton() {
     </Dialog>
   )
 }
-                  required={isSignUp}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-              <Input
-                id="email"
-                type="email"
-                placeholder="your@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="pl-9"
