@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { supabase } from "@/lib/supabase"
 import type { User } from "@supabase/supabase-js"
-import { Loader2, Mail, Lock, User as UserIcon } from "lucide-react"
+import { Loader2, Mail, Lock, User as UserIcon, AlertCircle, CheckCircle } from "lucide-react"
 
 export default function AuthButton() {
   const [user, setUser] = useState<User | null>(null)
@@ -18,6 +18,7 @@ export default function AuthButton() {
   const [authLoading, setAuthLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [signingOut, setSigningOut] = useState(false)
 
   // Form data
   const [email, setEmail] = useState('')
@@ -25,49 +26,160 @@ export default function AuthButton() {
   const [name, setName] = useState('')
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
+    let mounted = true
 
-    // Listen for auth changes
+    // Get initial session with better error handling
+    const getInitialSession = async () => {
+      try {
+        console.log('🔍 Getting initial session...')
+        const { data: { session }, error } = await supabase.auth.getSession()
+        
+        if (error) {
+          console.error('Error getting session:', error)
+        }
+        
+        if (mounted) {
+          setUser(session?.user ?? null)
+          setLoading(false)
+          console.log('👤 Initial user:', session?.user?.email || 'Not logged in')
+        }
+      } catch (error) {
+        console.error('Error in getInitialSession:', error)
+        if (mounted) {
+          setLoading(false)
+        }
+      }
+    }
+
+    getInitialSession()
+
+    // Listen for auth changes with enhanced user creation
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setUser(session?.user ?? null)
-      setLoading(false)
+      console.log('🔄 Auth state changed:', event, session?.user?.email || 'No user')
+      
+      if (mounted) {
+        setUser(session?.user ?? null)
+        setLoading(false)
 
-      if (event === 'SIGNED_IN') {
-        setShowDialog(false)
-        setMessage('')
-        setError('')
-        
-        // Create user profile if it doesn't exist
-        if (session?.user) {
-          const { error: profileError } = await supabase
-            .from('users')
-            .upsert({
-              id: session.user.id,
-              email: session.user.email,
-              name: name || session.user.email?.split('@')[0] || 'User',
-              updated_at: new Date().toISOString()
-            })
+        if (event === 'SIGNED_IN' && session?.user) {
+          console.log('✅ User signed in, ensuring database record...')
+          setShowDialog(false)
+          setMessage('')
+          setError('')
           
-          if (profileError) {
-            console.error('Error creating user profile:', profileError)
-          }
+          // Ensure user exists in custom users table
+          await ensureUserInDatabase(session.user)
+        }
+
+        if (event === 'SIGNED_OUT') {
+          console.log('👋 User signed out')
+          setUser(null)
         }
       }
     })
 
-    return () => subscription.unsubscribe()
-  }, [name])
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  // Enhanced user creation with better error handling
+  const ensureUserInDatabase = async (authUser: User) => {
+    try {
+      console.log('🔍 Checking if user exists in database...')
+      
+      // Check if user already exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from('users')
+        .select('id, email, full_name')
+        .eq('id', authUser.id)
+        .single()
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('❌ Error checking user:', checkError)
+        return
+      }
+
+      if (!existingUser) {
+        console.log('👤 Creating user in database...')
+        
+        const userData = {
+          id: authUser.id,
+          email: authUser.email,
+          full_name: authUser.user_metadata?.full_name || 
+                    authUser.user_metadata?.name || 
+                    name || 
+                    authUser.email?.split('@')[0] || 
+                    'User',
+          avatar_url: authUser.user_metadata?.avatar_url,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+
+        const { error: insertError } = await supabase
+          .from('users')
+          .insert(userData)
+
+        if (insertError) {
+          console.error('❌ Error creating user:', insertError)
+          // Don't show error to user as this shouldn't break the flow
+        } else {
+          console.log('✅ User created successfully in database')
+        }
+      } else {
+        console.log('✅ User already exists in database:', existingUser.email)
+        
+        // Update user info if needed
+        const shouldUpdate = 
+          existingUser.full_name !== (authUser.user_metadata?.full_name || authUser.user_metadata?.name) ||
+          !existingUser.full_name
+
+        if (shouldUpdate) {
+          console.log('🔄 Updating user info...')
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({
+              full_name: authUser.user_metadata?.full_name || 
+                        authUser.user_metadata?.name || 
+                        existingUser.full_name ||
+                        authUser.email?.split('@')[0] || 
+                        'User',
+              avatar_url: authUser.user_metadata?.avatar_url,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', authUser.id)
+
+          if (updateError) {
+            console.error('❌ Error updating user:', updateError)
+          } else {
+            console.log('✅ User info updated')
+          }
+        }
+      }
+    } catch (error) {
+      console.error('💥 Unexpected error in ensureUserInDatabase:', error)
+    }
+  }
 
   const handleSignOut = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) {
+    setSigningOut(true)
+    try {
+      console.log('👋 Signing out...')
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        console.error('❌ Sign out error:', error)
+        setError('Error signing out')
+      } else {
+        console.log('✅ Signed out successfully')
+      }
+    } catch (error) {
+      console.error('💥 Sign out error:', error)
       setError('Error signing out')
+    } finally {
+      setSigningOut(false)
     }
   }
 
@@ -77,37 +189,96 @@ export default function AuthButton() {
     setError('')
     setMessage('')
 
+    console.log(`🚀 Starting ${isSignUp ? 'signup' : 'signin'}...`)
+
     try {
       if (isSignUp) {
-        // Sign up
+        console.log('📝 Attempting signup...')
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
             data: {
-              name: name
-            }
+              full_name: name,
+              name: name // Backup field
+            },
+            emailRedirectTo: `${window.location.origin}/auth/callback`
           }
         })
 
+        console.log('📊 Signup response:', { 
+          user: data.user?.email, 
+          session: !!data.session, 
+          error: error?.message 
+        })
+
         if (error) {
+          console.error('❌ Signup error:', error)
           setError(error.message)
         } else if (data.user) {
-          setMessage('Check your email for the confirmation link!')
+          if (data.session) {
+            console.log('🎉 User signed up and logged in immediately')
+            setMessage('Account created successfully!')
+            // User will be handled by auth state change
+          } else {
+            console.log('📧 User created, email confirmation required')
+            setMessage('Account created! Please check your email (including spam folder) for a verification link.')
+          }
         }
       } else {
-        // Sign in
-        const { error } = await supabase.auth.signInWithPassword({
+        console.log('🔐 Attempting signin...')
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         })
 
+        console.log('📊 Signin response:', { 
+          user: data.user?.email, 
+          session: !!data.session, 
+          error: error?.message 
+        })
+
         if (error) {
+          console.error('❌ Signin error:', error)
           setError(error.message)
+        } else {
+          console.log('✅ Signin successful')
+          // User will be handled by auth state change
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      console.error('💥 Unexpected auth error:', err)
       setError('An unexpected error occurred')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleResendEmail = async () => {
+    if (!email) {
+      setError('Please enter your email first')
+      return
+    }
+
+    setAuthLoading(true)
+    console.log('📧 Resending verification email...')
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email
+      })
+
+      if (error) {
+        console.error('❌ Resend error:', error)
+        setError(error.message)
+      } else {
+        console.log('✅ Resend successful')
+        setMessage('Verification email resent! Check your inbox and spam folder.')
+      }
+    } catch (err: any) {
+      console.error('💥 Resend error:', err)
+      setError('Failed to resend email')
     } finally {
       setAuthLoading(false)
     }
@@ -126,6 +297,7 @@ export default function AuthButton() {
     resetForm()
   }
 
+  // Loading state
   if (loading) {
     return (
       <Button disabled className="bg-gradient-to-r from-orange-400 to-pink-500">
@@ -135,6 +307,7 @@ export default function AuthButton() {
     )
   }
 
+  // Authenticated user state
   if (user) {
     return (
       <div className="flex items-center gap-3">
@@ -143,21 +316,33 @@ export default function AuthButton() {
             <UserIcon className="w-4 h-4 text-white" />
           </div>
           <span className="text-sm font-medium hidden sm:inline">
-            {user.user_metadata?.name || user.email?.split("@")[0] || 'User'}
+            {user.user_metadata?.full_name || 
+             user.user_metadata?.name || 
+             user.email?.split("@")[0] || 
+             'User'}
           </span>
         </div>
         <Button
           onClick={handleSignOut}
+          disabled={signingOut}
           variant="outline"
           size="sm"
           className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
         >
-          Sign Out
+          {signingOut ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Signing out...
+            </>
+          ) : (
+            'Sign Out'
+          )}
         </Button>
       </div>
     )
   }
 
+  // Unauthenticated state
   return (
     <Dialog open={showDialog} onOpenChange={setShowDialog}>
       <DialogTrigger asChild>
@@ -243,13 +428,15 @@ export default function AuthButton() {
 
           {error && (
             <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
 
           {message && (
-            <Alert>
-              <AlertDescription>{message}</AlertDescription>
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertDescription className="text-green-800">{message}</AlertDescription>
             </Alert>
           )}
 
@@ -267,6 +454,19 @@ export default function AuthButton() {
               isSignUp ? 'Create Account' : 'Sign In'
             )}
           </Button>
+
+          {/* Resend email button for signup */}
+          {isSignUp && email && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full border-blue-200 text-blue-600"
+              onClick={handleResendEmail}
+              disabled={authLoading}
+            >
+              📧 Resend Verification Email
+            </Button>
+          )}
 
           <div className="text-center">
             <button
