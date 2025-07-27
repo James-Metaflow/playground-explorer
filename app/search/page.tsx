@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Search, MapPin, Loader2, Navigation, AlertCircle, Heart, Star } from "lucide-react"
+import { Search, MapPin, Loader2, Navigation, AlertCircle, Heart, Star, Database, TestTube } from "lucide-react"
 import Link from "next/link"
 import AuthButton from "@/components/auth-button"
 import SimpleMap from "@/components/simple-map"
@@ -228,7 +228,8 @@ export default function SearchPage() {
   const [selectedPlayground, setSelectedPlayground] = useState<EnhancedPlaygroundData | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
   const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null)
-  const [activeTab, setActiveTab] = useState<'list' | 'map'>('list') // Add tab state
+  const [activeTab, setActiveTab] = useState<'list' | 'map'>('list')
+  const [showDebug, setShowDebug] = useState(false)
 
   // Auth state management
   useEffect(() => {
@@ -260,38 +261,66 @@ export default function SearchPage() {
 
   const loadDatabasePlaygrounds = async () => {
     try {
+      console.log('🔍 Loading database playgrounds...')
+      
+      // Test basic database connection first
+      const { data: testData, error: testError } = await supabase
+        .from('playgrounds')
+        .select('count(*)')
+        .limit(1)
+      
+      console.log('📊 Database connection test:', { testData, testError })
+      
+      if (testError) {
+        console.error('❌ Database connection failed:', testError)
+        setError(`Database connection failed: ${testError.message}`)
+        return
+      }
+
       const { data, error } = await supabase
         .from('playgrounds')
         .select('*')
         .order('created_at', { ascending: false })
+        .limit(100) // Add limit for performance
+
+      console.log('📊 Database playgrounds loaded:', { 
+        count: data?.length || 0, 
+        error,
+        sample: data?.[0]
+      })
 
       if (error) {
-        console.error('Error loading database playgrounds:', error)
+        console.error('❌ Error loading database playgrounds:', error)
+        setError(`Failed to load playgrounds: ${error.message}`)
         return
       }
 
       setDbPlaygrounds(data || [])
+      console.log('✅ Database playgrounds loaded successfully')
     } catch (error) {
-      console.error('Error loading database playgrounds:', error)
+      console.error('💥 Unexpected error loading database playgrounds:', error)
+      setError(`Unexpected error: ${error}`)
     }
   }
 
   const loadUserFavorites = async (userId: string) => {
     try {
+      console.log('💖 Loading user favorites...')
       const { data, error } = await supabase
         .from('user_favorites')
         .select('playground_id')
         .eq('user_id', userId)
 
       if (error) {
-        console.error('Error loading favorites:', error)
+        console.error('❌ Error loading favorites:', error)
         return
       }
 
       const favoriteIds = new Set(data?.map(f => f.playground_id) || [])
       setFavorites(favoriteIds)
+      console.log('✅ Favorites loaded:', favoriteIds.size, 'items')
     } catch (error) {
-      console.error('Error loading favorites:', error)
+      console.error('💥 Error loading favorites:', error)
     }
   }
 
@@ -333,85 +362,69 @@ export default function SearchPage() {
     }
   }
 
-  // Enhanced search with photos and proper distance sorting
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return
-
-    setLoading(true)
-    setError(null)
-    setSelectedPlayground(null) // Clear any selected playground
-    setActiveTab('list') // Reset to list view
-
-    try {
-      // Geocode the search query first
-      let searchLat: number | null = null
-      let searchLon: number | null = null
-
-      try {
-        const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=gb&limit=1`
-        const geocodeResponse = await fetch(geocodeUrl, {
-          headers: { "User-Agent": "PlaygroundExplorer/1.0" }
-        })
-
-        if (geocodeResponse.ok) {
-          const geocodeData = await geocodeResponse.json()
-          if (geocodeData && geocodeData.length > 0) {
-            searchLat = parseFloat(geocodeData[0].lat)
-            searchLon = parseFloat(geocodeData[0].lon)
-            setSearchCenter([searchLat, searchLon])
-          }
-        }
-      } catch (geocodeError) {
-        console.warn('Geocoding failed:', geocodeError)
-      }
-
-      // Search with enhanced photo support
-      const [externalResults, dbResults] = await Promise.all([
-        searchPlaygroundsWithPhotos(searchQuery),
-        searchDatabasePlaygrounds(searchQuery)
-      ])
-
-      // Combine and deduplicate results
-      const combinedResults = [...externalResults, ...dbResults]
-      
-      // Sort by distance from search center if we have coordinates
-      let sortedResults = combinedResults
-      if (searchLat && searchLon) {
-        sortedResults = combinedResults.sort((a, b) => {
-          const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
-          const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
-          return distA - distB
-        })
-      }
-
-      setPlaygrounds(sortedResults)
-
-      if (sortedResults.length > 0) {
-        if (searchLat && searchLon) {
-          setMapCenter([searchLat, searchLon])
-        } else {
-          setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
-        }
-      } else {
-        setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
-      }
-    } catch (error) {
-      setError(`Search failed: ${error}`)
-    } finally {
-      setLoading(false)
-    }
-  }
-
+  // Enhanced database search with debugging
   const searchDatabasePlaygrounds = async (query: string): Promise<EnhancedPlaygroundData[]> => {
     try {
+      console.log('🔍 Starting database search for:', query)
+      
+      // Check current user first
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      console.log('👤 Current user:', user?.email, userError)
+      
+      // Test basic database connection
+      console.log('🧪 Testing database connection...')
+      const { data: testData, error: testError } = await supabase
+        .from('playgrounds')
+        .select('count(*)')
+        .limit(1)
+      
+      console.log('📊 Database test result:', { testData, testError })
+      
+      if (testError) {
+        console.error('❌ Database connection failed:', testError)
+        console.error('Error details:', {
+          code: testError.code,
+          message: testError.message,
+          details: testError.details,
+          hint: testError.hint
+        })
+        return []
+      }
+      
+      // Perform the actual search
+      console.log('🔍 Performing search query...')
       const { data, error } = await supabase
         .from('playgrounds')
         .select('*')
         .or(`name.ilike.%${query}%,location.ilike.%${query}%`)
+        .limit(50) // Add limit to prevent huge results
 
-      if (error) throw error
+      console.log('📊 Search result:', { 
+        dataCount: data?.length || 0, 
+        error,
+        firstResult: data?.[0]
+      })
 
-      return (data || []).map(pg => ({
+      if (error) {
+        console.error('❌ Search error:', error)
+        console.error('Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        })
+        
+        // If it's an RLS error, provide specific guidance
+        if (error.code === '42501' || error.message?.includes('permission')) {
+          console.error('🚨 This looks like a Row Level Security (RLS) issue!')
+          console.error('💡 Solution: Run the RLS policies SQL in your Supabase dashboard')
+        }
+        
+        return []
+      }
+
+      // Transform the data
+      const transformedData = (data || []).map(pg => ({
         id: `db-${pg.id}`,
         name: pg.name,
         lat: pg.lat || 51.5074,
@@ -432,16 +445,107 @@ export default function SearchPage() {
           attribution: 'Unsplash'
         }]
       }))
+
+      console.log('✅ Database search completed:', transformedData.length, 'results')
+      return transformedData
+
     } catch (error) {
-      console.error('Database search error:', error)
+      console.error('💥 Unexpected error in database search:', error)
       return []
+    }
+  }
+
+  // Enhanced search with photos and proper distance sorting
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
+
+    setLoading(true)
+    setError(null)
+    setSelectedPlayground(null)
+    setActiveTab('list')
+
+    console.log('🚀 Starting enhanced search...')
+    console.log('🔍 Search query:', searchQuery)
+    
+    try {
+      // Check auth status
+      const { data: { session } } = await supabase.auth.getSession()
+      console.log('🔐 Auth status:', session ? 'Authenticated' : 'Anonymous')
+      
+      // Geocode the search query first
+      let searchLat: number | null = null
+      let searchLon: number | null = null
+
+      try {
+        console.log('🌍 Geocoding location...')
+        const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=gb&limit=1`
+        const geocodeResponse = await fetch(geocodeUrl, {
+          headers: { "User-Agent": "PlaygroundExplorer/1.0" }
+        })
+
+        if (geocodeResponse.ok) {
+          const geocodeData = await geocodeResponse.json()
+          if (geocodeData && geocodeData.length > 0) {
+            searchLat = parseFloat(geocodeData[0].lat)
+            searchLon = parseFloat(geocodeData[0].lon)
+            setSearchCenter([searchLat, searchLon])
+            console.log('📍 Geocoded to:', searchLat, searchLon)
+          }
+        }
+      } catch (geocodeError) {
+        console.warn('⚠️ Geocoding failed:', geocodeError)
+      }
+
+      // Search with enhanced photo support and debugging
+      console.log('🔍 Searching external APIs...')
+      const externalResults = await searchPlaygroundsWithPhotos(searchQuery)
+      console.log('📊 External results:', externalResults.length)
+
+      console.log('🔍 Searching database...')
+      const dbResults = await searchDatabasePlaygrounds(searchQuery)
+      console.log('📊 Database results:', dbResults.length)
+
+      // Combine and deduplicate results
+      const combinedResults = [...externalResults, ...dbResults]
+      console.log('📊 Combined results:', combinedResults.length)
+      
+      // Sort by distance from search center if we have coordinates
+      let sortedResults = combinedResults
+      if (searchLat && searchLon) {
+        sortedResults = combinedResults.sort((a, b) => {
+          const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
+          const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
+          return distA - distB
+        })
+        console.log('📍 Results sorted by distance')
+      }
+
+      setPlaygrounds(sortedResults)
+
+      if (sortedResults.length > 0) {
+        if (searchLat && searchLon) {
+          setMapCenter([searchLat, searchLon])
+        } else {
+          setMapCenter([sortedResults[0].lat, sortedResults[0].lon])
+        }
+        console.log('✅ Search completed successfully')
+      } else {
+        setError(`No playgrounds found near "${searchQuery}". Try a different location.`)
+        console.log('⚠️ No results found')
+      }
+    } catch (error) {
+      console.error('💥 Search failed:', error)
+      setError(`Search failed: ${error}`)
+    } finally {
+      setLoading(false)
+      console.log('🏁 Search process completed')
     }
   }
 
   // Enhanced nearby search with photos
   const handleNearbySearch = async () => {
-    setSelectedPlayground(null) // Clear any selected playground
-    setActiveTab('list') // Reset to list view
+    setSelectedPlayground(null)
+    setActiveTab('list')
     
     let searchLat = userLocation?.[0]
     let searchLon = userLocation?.[1]
@@ -533,8 +637,8 @@ export default function SearchPage() {
     setLoading(true)
     setError(null)
     setSearchQuery(location)
-    setSelectedPlayground(null) // Clear any selected playground
-    setActiveTab('list') // Reset to list view
+    setSelectedPlayground(null)
+    setActiveTab('list')
 
     try {
       let searchLat: number | null = null
@@ -596,14 +700,9 @@ export default function SearchPage() {
     console.log('🎯 Playground coordinates:', playground.lat, playground.lon)
     
     setSelectedPlayground(playground)
-    
-    // Set map center and zoom to the specific playground
     setMapCenter([playground.lat, playground.lon])
-    
-    // Switch to map tab using state
     setActiveTab('map')
     
-    // Force map to update after tab switch
     setTimeout(() => {
       console.log('🗺️ Map should now be centered on:', playground.lat, playground.lon)
     }, 200)
@@ -641,6 +740,43 @@ export default function SearchPage() {
       return
     }
     router.push(`/playground/${playgroundId}?tab=rating`)
+  }
+
+  // Test database connectivity function
+  const testDatabaseConnection = async () => {
+    console.log('🧪 Testing database connection...')
+    
+    try {
+      // Test 1: Basic connection
+      const { data: basicTest, error: basicError } = await supabase
+        .from('playgrounds')
+        .select('count(*)')
+      
+      console.log('Test 1 - Basic connection:', { basicTest, basicError })
+      
+      // Test 2: Read permissions
+      const { data: readTest, error: readError } = await supabase
+        .from('playgrounds')
+        .select('id, name')
+        .limit(1)
+      
+      console.log('Test 2 - Read permissions:', { readTest, readError })
+      
+      // Test 3: User table access
+      const { data: userTest, error: userError } = await supabase
+        .from('users')
+        .select('id')
+        .limit(1)
+      
+      console.log('Test 3 - User table access:', { userTest, userError })
+      
+      // Test 4: Current user info
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      console.log('Test 4 - Current user:', { user: user?.email, authError })
+      
+    } catch (error) {
+      console.error('💥 Database test failed:', error)
+    }
   }
 
   const getDistanceFromSearchCenter = (playground: EnhancedPlaygroundData): number | null => {
@@ -736,6 +872,16 @@ export default function SearchPage() {
                     )}
                     Near Me
                   </Button>
+                  {/* Debug button */}
+                  <Button
+                    onClick={() => setShowDebug(!showDebug)}
+                    variant="outline"
+                    size="sm"
+                    className="border-blue-300 text-blue-600 hover:bg-blue-50"
+                  >
+                    <TestTube className="w-4 h-4 mr-1" />
+                    Debug
+                  </Button>
                 </div>
               </div>
 
@@ -754,6 +900,49 @@ export default function SearchPage() {
                   </Button>
                 ))}
               </div>
+
+              {/* Debug panel */}
+              {showDebug && (
+                <Card className="bg-blue-50 border-blue-200">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Database className="w-4 h-4 text-blue-600" />
+                      <h3 className="font-medium text-blue-800">Debug Panel</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="font-medium text-blue-700">Database Status:</p>
+                        <p>Playgrounds loaded: {dbPlaygrounds.length}</p>
+                        <p>User: {user ? '✅ Authenticated' : '❌ Anonymous'}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-blue-700">Search Status:</p>
+                        <p>Results: {playgrounds.length}</p>
+                        <p>Search center: {searchCenter ? '✅ Set' : '❌ None'}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-blue-700">Actions:</p>
+                        <Button
+                          onClick={testDatabaseConnection}
+                          size="sm"
+                          variant="outline"
+                          className="border-blue-300 text-blue-600 mr-2"
+                        >
+                          Test DB
+                        </Button>
+                        <Button
+                          onClick={loadDatabasePlaygrounds}
+                          size="sm"
+                          variant="outline"
+                          className="border-blue-300 text-blue-600"
+                        >
+                          Reload DB
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -781,7 +970,6 @@ export default function SearchPage() {
               data-value="list"
               onClick={() => {
                 console.log('📋 List tab clicked')
-                // Clear selected playground when going back to list
                 setSelectedPlayground(null)
               }}
             >
@@ -847,7 +1035,6 @@ export default function SearchPage() {
                 >
                   <CardContent className="p-6">
                     <div className="flex flex-col md:flex-row gap-6">
-                      {/* Updated photo component */}
                       <PlaygroundPhotoComponent 
                         playground={playground}
                         className="md:w-48 h-32"
@@ -906,19 +1093,16 @@ export default function SearchPage() {
                                playground.source === 'database' ? 'User Added' :
                                playground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
                             </Badge>
-                            {/* Google Rating */}
                             {playground.googleRating && (
                               <Badge variant="outline" className="border-yellow-300 text-yellow-700">
                                 ⭐ Google: {playground.googleRating.toFixed(1)}
                               </Badge>
                             )}
-                            {/* Playground Explorer Rating */}
                             {playground.explorerRating && (
                               <Badge variant="outline" className="border-pink-300 text-pink-700">
                                 ⭐ Explorer: {playground.explorerRating.toFixed(1)}
                               </Badge>
                             )}
-                            {/* Photo source indicator */}
                             {playground.photos && playground.photos.length > 0 && (
                               <Badge variant="outline" className="border-green-300 text-green-700">
                                 📸 {playground.photos[0].source === 'google' ? 'Real Photos' : 'Stock Photos'}
@@ -992,7 +1176,7 @@ export default function SearchPage() {
                 </div>
                 <SimpleMap
                   center={mapCenter}
-                  zoom={selectedPlayground ? 16 : 12} // Zoom in more when a specific playground is selected
+                  zoom={selectedPlayground ? 16 : 12}
                   height="500px"
                   playgrounds={playgrounds.map(p => ({
                     id: p.id,
@@ -1011,14 +1195,13 @@ export default function SearchPage() {
                   }))}
                   onPlaygroundClick={(playground) => {
                     console.log('🎯 Map marker clicked:', playground.name)
-                    // Find the enhanced playground data
                     const enhancedPlayground = playgrounds.find(p => p.id === playground.id)
                     if (enhancedPlayground) {
                       setSelectedPlayground(enhancedPlayground)
                       setMapCenter([enhancedPlayground.lat, enhancedPlayground.lon])
                     }
                   }}
-                  key={`${mapCenter[0]}-${mapCenter[1]}-${selectedPlayground?.id || 'none'}`} // Force re-render when center changes
+                  key={`${mapCenter[0]}-${mapCenter[1]}-${selectedPlayground?.id || 'none'}`}
                 />
               </CardContent>
             </Card>
@@ -1027,7 +1210,6 @@ export default function SearchPage() {
               <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
                 <CardContent className="p-6">
                   <div className="flex gap-4 mb-4">
-                    {/* Photo in map view */}
                     <PlaygroundPhotoComponent 
                       playground={selectedPlayground}
                       className="w-32 h-24 flex-shrink-0"
@@ -1046,13 +1228,11 @@ export default function SearchPage() {
                               {selectedPlayground.opening_hours && (
                                 <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
                               )}
-                              {/* Google Rating */}
                               {selectedPlayground.googleRating && (
                                 <p className="text-yellow-600 font-medium mb-2">
                                   ⭐ Google Rating: {selectedPlayground.googleRating.toFixed(1)} / 5.0
                                 </p>
                               )}
-                              {/* Playground Explorer Rating */}
                               {selectedPlayground.explorerRating && (
                                 <p className="text-pink-600 font-medium mb-2">
                                   ⭐ Playground Explorer: {selectedPlayground.explorerRating.toFixed(1)} / 5.0
