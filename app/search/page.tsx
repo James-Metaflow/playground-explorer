@@ -339,6 +339,8 @@ export default function SearchPage() {
 
     setLoading(true)
     setError(null)
+    setSelectedPlayground(null) // Clear any selected playground
+    setActiveTab('list') // Reset to list view
 
     try {
       // Geocode the search query first
@@ -438,6 +440,9 @@ export default function SearchPage() {
 
   // Enhanced nearby search with photos
   const handleNearbySearch = async () => {
+    setSelectedPlayground(null) // Clear any selected playground
+    setActiveTab('list') // Reset to list view
+    
     let searchLat = userLocation?.[0]
     let searchLon = userLocation?.[1]
 
@@ -528,6 +533,8 @@ export default function SearchPage() {
     setLoading(true)
     setError(null)
     setSearchQuery(location)
+    setSelectedPlayground(null) // Clear any selected playground
+    setActiveTab('list') // Reset to list view
 
     try {
       let searchLat: number | null = null
@@ -586,19 +593,20 @@ export default function SearchPage() {
 
   const handlePlaygroundClick = (playground: EnhancedPlaygroundData) => {
     console.log('🗺️ Switching to map view for:', playground.name)
+    console.log('🎯 Playground coordinates:', playground.lat, playground.lon)
+    
     setSelectedPlayground(playground)
+    
+    // Set map center and zoom to the specific playground
     setMapCenter([playground.lat, playground.lon])
     
     // Switch to map tab using state
     setActiveTab('map')
     
-    // Also try DOM manipulation as backup
+    // Force map to update after tab switch
     setTimeout(() => {
-      const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
-      if (mapTab) {
-        mapTab.click()
-      }
-    }, 100)
+      console.log('🗺️ Map should now be centered on:', playground.lat, playground.lon)
+    }, 200)
   }
 
   const handleViewDetails = (playground: EnhancedPlaygroundData) => {
@@ -759,19 +767,32 @@ export default function SearchPage() {
         )}
 
         {/* Results */}
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'list' | 'map')} className="space-y-6">
+        <Tabs value={activeTab} onValueChange={(value) => {
+          console.log('🔄 Tab changing to:', value)
+          try {
+            setActiveTab(value as 'list' | 'map')
+          } catch (error) {
+            console.error('❌ Error changing tab:', error)
+          }
+        }} className="space-y-6">
           <TabsList className="grid w-full grid-cols-2 bg-white/80 border border-orange-200">
             <TabsTrigger 
               value="list" 
               data-value="list"
-              onClick={() => console.log('📋 Switched to List View')}
+              onClick={() => {
+                console.log('📋 List tab clicked')
+                // Clear selected playground when going back to list
+                setSelectedPlayground(null)
+              }}
             >
               List View ({playgrounds.length})
             </TabsTrigger>
             <TabsTrigger 
               value="map" 
               data-value="map"
-              onClick={() => console.log('🗺️ Switched to Map View')}
+              onClick={() => {
+                console.log('🗺️ Map tab clicked')
+              }}
             >
               Map View
             </TabsTrigger>
@@ -971,7 +992,7 @@ export default function SearchPage() {
                 </div>
                 <SimpleMap
                   center={mapCenter}
-                  zoom={12}
+                  zoom={selectedPlayground ? 16 : 12} // Zoom in more when a specific playground is selected
                   height="500px"
                   playgrounds={playgrounds.map(p => ({
                     id: p.id,
@@ -994,8 +1015,10 @@ export default function SearchPage() {
                     const enhancedPlayground = playgrounds.find(p => p.id === playground.id)
                     if (enhancedPlayground) {
                       setSelectedPlayground(enhancedPlayground)
+                      setMapCenter([enhancedPlayground.lat, enhancedPlayground.lon])
                     }
                   }}
+                  key={`${mapCenter[0]}-${mapCenter[1]}-${selectedPlayground?.id || 'none'}`} // Force re-render when center changes
                 />
               </CardContent>
             </Card>
