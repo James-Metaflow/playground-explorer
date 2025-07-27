@@ -37,20 +37,197 @@ interface DatabasePlayground {
   created_by: string
 }
 
+interface PlaygroundPhoto {
+  url: string
+  source: 'google' | 'unsplash' | 'user'
+  attribution?: string
+  width?: number
+  height?: number
+}
+
+// Enhanced PlaygroundData interface with photos
+interface EnhancedPlaygroundData extends PlaygroundData {
+  photos?: PlaygroundPhoto[]
+  primaryPhoto?: string
+}
+
+// Photo component for playground images
+const PlaygroundPhotoComponent: React.FC<{ 
+  playground: EnhancedPlaygroundData
+  className?: string 
+}> = ({ playground, className = "" }) => {
+  const [imageLoaded, setImageLoaded] = useState(false)
+  const [imageError, setImageError] = useState(false)
+  
+  // Get photo URL with fallback to placeholder
+  const photoUrl = playground.primaryPhoto || getPlaygroundPhotoUrl(playground)
+  
+  if (!photoUrl || imageError) {
+    // Fallback to gradient with emoji
+    return (
+      <div className={`bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center ${className}`}>
+        <span className="text-4xl">🏰</span>
+      </div>
+    )
+  }
+  
+  return (
+    <div className={`relative overflow-hidden rounded-lg ${className}`}>
+      {!imageLoaded && (
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-200 to-purple-200 flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+        </div>
+      )}
+      <img
+        src={photoUrl}
+        alt={`${playground.name} playground`}
+        className={`w-full h-full object-cover transition-opacity duration-300 ${
+          imageLoaded ? 'opacity-100' : 'opacity-0'
+        }`}
+        onLoad={() => setImageLoaded(true)}
+        onError={() => setImageError(true)}
+      />
+      {imageLoaded && (
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent text-white text-xs p-2">
+          <div className="text-right opacity-80">📸</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Helper function to get photo URLs
+function getPlaygroundPhotoUrl(playground: EnhancedPlaygroundData): string | null {
+  // For testing, use Unsplash with playground-related keywords
+  const keywords = ['playground', 'children-playing', 'park', 'slide', 'swing-set']
+  const randomKeyword = keywords[Math.floor(Math.random() * keywords.length)]
+  const seed = playground.name.replace(/\s+/g, '').toLowerCase()
+  return `https://source.unsplash.com/400x300/?${randomKeyword}&sig=${seed}`
+}
+
+// Enhanced Google Places search with photo fetching
+async function fetchGooglePlacesWithPhotos(query: string): Promise<EnhancedPlaygroundData[]> {
+  try {
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY
+    if (!apiKey) {
+      console.warn('Google API key not found, using fallback search')
+      return []
+    }
+
+    // Search for places
+    const searchUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=playground+${encodeURIComponent(query)}&key=${apiKey}`
+    const response = await fetch(searchUrl)
+    const data = await response.json()
+    
+    if (!response.ok || !data.results) {
+      throw new Error(data.error_message || 'Failed to fetch Google Places')
+    }
+
+    // Process results and add photos
+    const playgrounds = await Promise.all(
+      (data.results || []).slice(0, 10).map(async (place: any) => {
+        let primaryPhoto = null
+        let photos: PlaygroundPhoto[] = []
+        
+        // If place has photos, get the first one using Google Places Photo API
+        if (place.photos && place.photos[0]) {
+          const photoRef = place.photos[0].photo_reference
+          primaryPhoto = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photoRef}&key=${apiKey}`
+          
+          photos = place.photos.slice(0, 3).map((photo: any) => ({
+            url: `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photo.photo_reference}&key=${apiKey}`,
+            source: 'google' as const,
+            attribution: 'Google',
+            width: photo.width,
+            height: photo.height
+          }))
+        }
+        
+        return {
+          id: `google-${place.place_id}`,
+          name: place.name,
+          lat: place.geometry.location.lat,
+          lon: place.geometry.location.lng,
+          address: place.formatted_address,
+          city: place.formatted_address?.split(',')[1]?.trim(),
+          amenities: place.types?.filter((type: string) => 
+            ['playground', 'park', 'tourist_attraction', 'point_of_interest'].includes(type)
+          ) || [],
+          source: 'google' as const,
+          googleRating: place.rating,
+          primaryPhoto,
+          photos
+        } as EnhancedPlaygroundData
+      })
+    )
+    
+    return playgrounds
+  } catch (error) {
+    console.error('Error fetching Google Places with photos:', error)
+    return []
+  }
+}
+
+// Enhanced search function that combines sources with photos
+async function searchPlaygroundsWithPhotos(query: string): Promise<EnhancedPlaygroundData[]> {
+  try {
+    const [googleResults, originalResults] = await Promise.all([
+      fetchGooglePlacesWithPhotos(query),
+      searchPlaygroundsByLocation(query)
+    ])
+
+    // Add photos to original results (OSM, etc.)
+    const enhancedOriginalResults: EnhancedPlaygroundData[] = originalResults.map(playground => ({
+      ...playground,
+      primaryPhoto: getPlaygroundPhotoUrl(playground),
+      photos: [{
+        url: getPlaygroundPhotoUrl(playground)!,
+        source: 'unsplash' as const,
+        attribution: 'Unsplash'
+      }]
+    }))
+
+    // Combine and deduplicate (prioritize Google results with real photos)
+    const combinedResults = [...googleResults, ...enhancedOriginalResults]
+    const deduplicatedResults = combinedResults.filter((playground, index, arr) => 
+      index === arr.findIndex(p => 
+        p.name.toLowerCase().trim() === playground.name.toLowerCase().trim() &&
+        Math.abs(p.lat - playground.lat) < 0.001 &&
+        Math.abs(p.lon - playground.lon) < 0.001
+      )
+    )
+
+    return deduplicatedResults
+  } catch (error) {
+    console.error('Error in searchPlaygroundsWithPhotos:', error)
+    // Fallback to original search
+    const originalResults = await searchPlaygroundsByLocation(query)
+    return originalResults.map(playground => ({
+      ...playground,
+      primaryPhoto: getPlaygroundPhotoUrl(playground),
+      photos: [{
+        url: getPlaygroundPhotoUrl(playground)!,
+        source: 'unsplash' as const,
+        attribution: 'Unsplash'
+      }]
+    }))
+  }
+}
+
 export default function SearchPage() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [playgrounds, setPlaygrounds] = useState<PlaygroundData[]>([])
+  const [playgrounds, setPlaygrounds] = useState<EnhancedPlaygroundData[]>([])
   const [dbPlaygrounds, setDbPlaygrounds] = useState<DatabasePlayground[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
   const [locationLoading, setLocationLoading] = useState(false)
   const [mapCenter, setMapCenter] = useState<[number, number]>([51.5074, -0.1278]) // Default to London
-  const [selectedPlayground, setSelectedPlayground] = useState<PlaygroundData | null>(null)
+  const [selectedPlayground, setSelectedPlayground] = useState<EnhancedPlaygroundData | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
-  const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null) // NEW: Track search center for distance sorting
+  const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null)
 
   // Auth state management
   useEffect(() => {
@@ -75,7 +252,7 @@ export default function SearchPage() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Load database playgrounds on mount (but don't search automatically)
+  // Load database playgrounds on mount
   useEffect(() => {
     loadDatabasePlaygrounds()
   }, [])
@@ -125,7 +302,6 @@ export default function SearchPage() {
 
     try {
       if (favorites.has(playgroundId)) {
-        // Remove favorite
         const { error } = await supabase
           .from('user_favorites')
           .delete()
@@ -140,7 +316,6 @@ export default function SearchPage() {
           return next
         })
       } else {
-        // Add favorite
         const { error } = await supabase
           .from('user_favorites')
           .insert({
@@ -157,7 +332,7 @@ export default function SearchPage() {
     }
   }
 
-  // Enhanced search with proper distance sorting
+  // Enhanced search with photos and proper distance sorting
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
 
@@ -165,7 +340,7 @@ export default function SearchPage() {
     setError(null)
 
     try {
-      // First geocode the search query to get the center point
+      // Geocode the search query first
       let searchLat: number | null = null
       let searchLon: number | null = null
 
@@ -187,9 +362,9 @@ export default function SearchPage() {
         console.warn('Geocoding failed:', geocodeError)
       }
 
-      // Search both external API and database
+      // Search with enhanced photo support
       const [externalResults, dbResults] = await Promise.all([
-        searchPlaygroundsByLocation(searchQuery),
+        searchPlaygroundsWithPhotos(searchQuery),
         searchDatabasePlaygrounds(searchQuery)
       ])
 
@@ -224,7 +399,7 @@ export default function SearchPage() {
     }
   }
 
-  const searchDatabasePlaygrounds = async (query: string): Promise<PlaygroundData[]> => {
+  const searchDatabasePlaygrounds = async (query: string): Promise<EnhancedPlaygroundData[]> => {
     try {
       const { data, error } = await supabase
         .from('playgrounds')
@@ -233,7 +408,6 @@ export default function SearchPage() {
 
       if (error) throw error
 
-      // TODO: Fetch Playground Explorer rating for each playground here if not already included
       return (data || []).map(pg => ({
         id: `db-${pg.id}`,
         name: pg.name,
@@ -246,8 +420,14 @@ export default function SearchPage() {
         access: pg.accessibility,
         opening_hours: pg.opening_hours,
         source: 'database' as const,
-        explorerRating: pg.explorerRating, // Add this if you fetch it
-        googleRating: pg.googleRating,     // Add this if you fetch it
+        explorerRating: pg.explorerRating,
+        googleRating: pg.googleRating,
+        primaryPhoto: getPlaygroundPhotoUrl({ name: pg.name } as EnhancedPlaygroundData),
+        photos: [{
+          url: getPlaygroundPhotoUrl({ name: pg.name } as EnhancedPlaygroundData)!,
+          source: 'unsplash' as const,
+          attribution: 'Unsplash'
+        }]
       }))
     } catch (error) {
       console.error('Database search error:', error)
@@ -255,7 +435,7 @@ export default function SearchPage() {
     }
   }
 
-  // Enhanced nearby search with proper distance sorting
+  // Enhanced nearby search with photos
   const handleNearbySearch = async () => {
     let searchLat = userLocation?.[0]
     let searchLon = userLocation?.[1]
@@ -289,7 +469,18 @@ export default function SearchPage() {
         getNearbyDatabasePlaygrounds(searchLat, searchLon)
       ])
 
-      const combinedResults = [...externalResults, ...dbResults]
+      // Add photos to external results
+      const enhancedExternalResults: EnhancedPlaygroundData[] = externalResults.map(playground => ({
+        ...playground,
+        primaryPhoto: getPlaygroundPhotoUrl(playground),
+        photos: [{
+          url: getPlaygroundPhotoUrl(playground)!,
+          source: 'unsplash' as const,
+          attribution: 'Unsplash'
+        }]
+      }))
+
+      const combinedResults = [...enhancedExternalResults, ...dbResults]
       const sortedResults = combinedResults.sort((a, b) => {
         const distA = calculateDistance(searchLat!, searchLon!, a.lat, a.lon)
         const distB = calculateDistance(searchLat!, searchLon!, b.lat, b.lon)
@@ -308,7 +499,7 @@ export default function SearchPage() {
     }
   }
 
-  const getNearbyDatabasePlaygrounds = async (lat: number, lon: number): Promise<PlaygroundData[]> => {
+  const getNearbyDatabasePlaygrounds = async (lat: number, lon: number): Promise<EnhancedPlaygroundData[]> => {
     return dbPlaygrounds.map(pg => ({
       id: `db-${pg.id}`,
       name: pg.name,
@@ -323,6 +514,12 @@ export default function SearchPage() {
       source: 'database' as const,
       explorerRating: pg.explorerRating,
       googleRating: pg.googleRating,
+      primaryPhoto: getPlaygroundPhotoUrl({ name: pg.name } as EnhancedPlaygroundData),
+      photos: [{
+        url: getPlaygroundPhotoUrl({ name: pg.name } as EnhancedPlaygroundData)!,
+        source: 'unsplash' as const,
+        attribution: 'Unsplash'
+      }]
     }))
   }
 
@@ -354,7 +551,7 @@ export default function SearchPage() {
       }
 
       const [externalResults, dbResults] = await Promise.all([
-        searchPlaygroundsByLocation(location),
+        searchPlaygroundsWithPhotos(location),
         searchDatabasePlaygrounds(location)
       ])
 
@@ -386,7 +583,7 @@ export default function SearchPage() {
     }
   }
 
-  const handlePlaygroundClick = (playground: PlaygroundData) => {
+  const handlePlaygroundClick = (playground: EnhancedPlaygroundData) => {
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
     const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
@@ -395,7 +592,7 @@ export default function SearchPage() {
     }
   }
 
-  const handleViewDetails = (playground: PlaygroundData) => {
+  const handleViewDetails = (playground: EnhancedPlaygroundData) => {
     let playgroundId = playground.id
     if (playgroundId.startsWith('google-')) {
       playgroundId = playgroundId.replace('google-', '')
@@ -410,7 +607,7 @@ export default function SearchPage() {
     router.push(`/playground/${playgroundId}`)
   }
 
-  const handleAddRating = (playground: PlaygroundData) => {
+  const handleAddRating = (playground: EnhancedPlaygroundData) => {
     if (!user) {
       router.push('/auth/signin')
       return
@@ -429,7 +626,7 @@ export default function SearchPage() {
     router.push(`/playground/${playgroundId}?tab=rating`)
   }
 
-  const getDistanceFromSearchCenter = (playground: PlaygroundData): number | null => {
+  const getDistanceFromSearchCenter = (playground: EnhancedPlaygroundData): number | null => {
     if (!searchCenter) return null
     return calculateDistance(searchCenter[0], searchCenter[1], playground.lat, playground.lon)
   }
@@ -481,7 +678,7 @@ export default function SearchPage() {
             Find Amazing Playgrounds
           </h2>
           <p className="text-gray-600 text-lg">
-            Discover real playgrounds across the UK using our comprehensive database and Google Places
+            Discover real playgrounds across the UK with photos from Google Places and our community
           </p>
         </div>
 
@@ -563,7 +760,7 @@ export default function SearchPage() {
             {loading && (
               <div className="text-center py-8">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-orange-500" />
-                <p className="text-gray-600">Searching for playgrounds...</p>
+                <p className="text-gray-600">Searching for playgrounds with photos...</p>
                 <p className="text-sm text-gray-500 mt-2">Checking Google Places and our database</p>
               </div>
             )}
@@ -608,9 +805,11 @@ export default function SearchPage() {
                 >
                   <CardContent className="p-6">
                     <div className="flex flex-col md:flex-row gap-6">
-                      <div className="md:w-48 h-32 bg-gradient-to-br from-blue-200 to-purple-200 rounded-lg flex items-center justify-center">
-                        <span className="text-4xl">🏰</span>
-                      </div>
+                      {/* Updated photo component */}
+                      <PlaygroundPhotoComponent 
+                        playground={playground}
+                        className="md:w-48 h-32"
+                      />
                       <div className="flex-1">
                         <div className="flex items-start justify-between mb-2">
                           <div>
@@ -668,13 +867,19 @@ export default function SearchPage() {
                             {/* Google Rating */}
                             {playground.googleRating && (
                               <Badge variant="outline" className="border-yellow-300 text-yellow-700">
-                                ⭐ Google Rating: {playground.googleRating.toFixed(1)}
+                                ⭐ Google: {playground.googleRating.toFixed(1)}
                               </Badge>
                             )}
                             {/* Playground Explorer Rating */}
                             {playground.explorerRating && (
                               <Badge variant="outline" className="border-pink-300 text-pink-700">
-                                ⭐ Playground Explorer: {playground.explorerRating.toFixed(1)}
+                                ⭐ Explorer: {playground.explorerRating.toFixed(1)}
+                              </Badge>
+                            )}
+                            {/* Photo source indicator */}
+                            {playground.photos && playground.photos.length > 0 && (
+                              <Badge variant="outline" className="border-green-300 text-green-700">
+                                📸 {playground.photos[0].source === 'google' ? 'Real Photos' : 'Stock Photos'}
                               </Badge>
                             )}
                           </div>
@@ -753,94 +958,108 @@ export default function SearchPage() {
             {selectedPlayground && (
               <Card className="bg-white/80 backdrop-blur-sm border-orange-200">
                 <CardContent className="p-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-xl font-bold mb-2">{selectedPlayground.name}</h3>
-                      <div className="grid md:grid-cols-2 gap-4">
+                  <div className="flex gap-4 mb-4">
+                    {/* Photo in map view */}
+                    <PlaygroundPhotoComponent 
+                      playground={selectedPlayground}
+                      className="w-32 h-24 flex-shrink-0"
+                    />
+                    <div className="flex-1">
+                      <div className="flex justify-between items-start mb-4">
                         <div>
-                          <p className="text-gray-600 mb-2">
-                            <MapPin className="w-4 h-4 inline mr-1" />
-                            {selectedPlayground.address && `${selectedPlayground.address}, `}
-                            {selectedPlayground.city || "UK"}
-                          </p>
-                          {selectedPlayground.opening_hours && (
-                            <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
-                          )}
-                          {/* Google Rating */}
-                          {selectedPlayground.googleRating && (
-                            <p className="text-yellow-600 font-medium mb-2">
-                              ⭐ Google Rating: {selectedPlayground.googleRating.toFixed(1)} / 5.0
-                            </p>
-                          )}
-                          {/* Playground Explorer Rating */}
-                          {selectedPlayground.explorerRating && (
-                            <p className="text-pink-600 font-medium mb-2">
-                              ⭐ Playground Explorer: {selectedPlayground.explorerRating.toFixed(1)} / 5.0
-                            </p>
-                          )}
-                          {searchCenter && (
-                            <p className="text-orange-600 font-medium mb-2">
-                              Distance from search: {calculateDistance(
-                                searchCenter[0], searchCenter[1],
-                                selectedPlayground.lat, selectedPlayground.lon
-                              ).toFixed(1)}km
-                            </p>
-                          )}
-                          {userLocation && (
-                            <p className="text-blue-600 font-medium mb-2">
-                              Distance from you: {calculateDistance(
-                                userLocation[0], userLocation[1],
-                                selectedPlayground.lat, selectedPlayground.lon
-                              ).toFixed(1)}km
-                            </p>
-                          )}
-                        </div>
-                        <div>
-                          {selectedPlayground.amenities && selectedPlayground.amenities.length > 0 && (
+                          <h3 className="text-xl font-bold mb-2">{selectedPlayground.name}</h3>
+                          <div className="grid md:grid-cols-2 gap-4">
                             <div>
-                              <p className="font-medium mb-2">Equipment & Features:</p>
-                              <div className="flex flex-wrap gap-1">
-                                {selectedPlayground.amenities.map((amenity, index) => (
-                                  <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
-                                    {amenity}
+                              <p className="text-gray-600 mb-2">
+                                <MapPin className="w-4 h-4 inline mr-1" />
+                                {selectedPlayground.address && `${selectedPlayground.address}, `}
+                                {selectedPlayground.city || "UK"}
+                              </p>
+                              {selectedPlayground.opening_hours && (
+                                <p className="text-gray-600 mb-2">Hours: {selectedPlayground.opening_hours}</p>
+                              )}
+                              {/* Google Rating */}
+                              {selectedPlayground.googleRating && (
+                                <p className="text-yellow-600 font-medium mb-2">
+                                  ⭐ Google Rating: {selectedPlayground.googleRating.toFixed(1)} / 5.0
+                                </p>
+                              )}
+                              {/* Playground Explorer Rating */}
+                              {selectedPlayground.explorerRating && (
+                                <p className="text-pink-600 font-medium mb-2">
+                                  ⭐ Playground Explorer: {selectedPlayground.explorerRating.toFixed(1)} / 5.0
+                                </p>
+                              )}
+                              {searchCenter && (
+                                <p className="text-orange-600 font-medium mb-2">
+                                  Distance from search: {calculateDistance(
+                                    searchCenter[0], searchCenter[1],
+                                    selectedPlayground.lat, selectedPlayground.lon
+                                  ).toFixed(1)}km
+                                </p>
+                              )}
+                              {userLocation && (
+                                <p className="text-blue-600 font-medium mb-2">
+                                  Distance from you: {calculateDistance(
+                                    userLocation[0], userLocation[1],
+                                    selectedPlayground.lat, selectedPlayground.lon
+                                  ).toFixed(1)}km
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              {selectedPlayground.amenities && selectedPlayground.amenities.length > 0 && (
+                                <div>
+                                  <p className="font-medium mb-2">Equipment & Features:</p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {selectedPlayground.amenities.map((amenity, index) => (
+                                      <Badge key={index} variant="outline" className="border-blue-300 text-blue-700">
+                                        {amenity}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              <div className="mt-3 space-y-2">
+                                <Badge
+                                  variant="secondary"
+                                  className={
+                                    selectedPlayground.source === 'google'
+                                      ? "bg-blue-100 text-blue-700"
+                                      : selectedPlayground.source === 'database'
+                                      ? "bg-green-100 text-green-700"
+                                      : selectedPlayground.source === 'osm'
+                                      ? "bg-purple-100 text-purple-700"
+                                      : "bg-gray-100 text-gray-700"
+                                  }
+                                >
+                                  Source: {selectedPlayground.source === 'google' ? 'Google Places' :
+                                          selectedPlayground.source === 'database' ? 'User Added' :
+                                          selectedPlayground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
+                                </Badge>
+                                {selectedPlayground.photos && selectedPlayground.photos.length > 0 && (
+                                  <Badge variant="outline" className="border-green-300 text-green-700 block w-fit">
+                                    📸 {selectedPlayground.photos.length} photo{selectedPlayground.photos.length !== 1 ? 's' : ''} available
                                   </Badge>
-                                ))}
+                                )}
                               </div>
                             </div>
-                          )}
-                          <div className="mt-3">
-                            <Badge
-                              variant="secondary"
-                              className={
-                                selectedPlayground.source === 'google'
-                                  ? "bg-blue-100 text-blue-700"
-                                  : selectedPlayground.source === 'database'
-                                  ? "bg-green-100 text-green-700"
-                                  : selectedPlayground.source === 'osm'
-                                  ? "bg-purple-100 text-purple-700"
-                                  : "bg-gray-100 text-gray-700"
-                              }
-                            >
-                              Source: {selectedPlayground.source === 'google' ? 'Google Places' :
-                                      selectedPlayground.source === 'database' ? 'User Added' :
-                                      selectedPlayground.source === 'osm' ? 'OpenStreetMap' : 'Test Data'}
-                            </Badge>
                           </div>
                         </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => toggleFavorite(selectedPlayground.id)}
+                          className={`${
+                            favorites.has(selectedPlayground.id) 
+                              ? 'text-pink-600 hover:text-pink-700' 
+                              : 'text-gray-400 hover:text-pink-600'
+                          }`}
+                        >
+                          <Heart className={`w-5 h-5 ${favorites.has(selectedPlayground.id) ? 'fill-current' : ''}`} />
+                        </Button>
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => toggleFavorite(selectedPlayground.id)}
-                      className={`${
-                        favorites.has(selectedPlayground.id) 
-                          ? 'text-pink-600 hover:text-pink-700' 
-                          : 'text-gray-400 hover:text-pink-600'
-                      }`}
-                    >
-                      <Heart className={`w-5 h-5 ${favorites.has(selectedPlayground.id) ? 'fill-current' : ''}`} />
-                    </Button>
                   </div>
                   <div className="flex gap-3">
                     <Button 
