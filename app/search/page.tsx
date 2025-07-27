@@ -228,6 +228,7 @@ export default function SearchPage() {
   const [selectedPlayground, setSelectedPlayground] = useState<EnhancedPlaygroundData | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
   const [searchCenter, setSearchCenter] = useState<[number, number] | null>(null)
+  const [activeTab, setActiveTab] = useState<'list' | 'map'>('list') // Add tab state
 
   // Auth state management
   useEffect(() => {
@@ -584,12 +585,20 @@ export default function SearchPage() {
   }
 
   const handlePlaygroundClick = (playground: EnhancedPlaygroundData) => {
+    console.log('🗺️ Switching to map view for:', playground.name)
     setSelectedPlayground(playground)
     setMapCenter([playground.lat, playground.lon])
-    const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
-    if (mapTab) {
-      mapTab.click()
-    }
+    
+    // Switch to map tab using state
+    setActiveTab('map')
+    
+    // Also try DOM manipulation as backup
+    setTimeout(() => {
+      const mapTab = document.querySelector('[data-value="map"]') as HTMLElement
+      if (mapTab) {
+        mapTab.click()
+      }
+    }, 100)
   }
 
   const handleViewDetails = (playground: EnhancedPlaygroundData) => {
@@ -750,10 +759,22 @@ export default function SearchPage() {
         )}
 
         {/* Results */}
-        <Tabs defaultValue="list" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'list' | 'map')} className="space-y-6">
           <TabsList className="grid w-full grid-cols-2 bg-white/80 border border-orange-200">
-            <TabsTrigger value="list" data-value="list">List View ({playgrounds.length})</TabsTrigger>
-            <TabsTrigger value="map" data-value="map">Map View</TabsTrigger>
+            <TabsTrigger 
+              value="list" 
+              data-value="list"
+              onClick={() => console.log('📋 Switched to List View')}
+            >
+              List View ({playgrounds.length})
+            </TabsTrigger>
+            <TabsTrigger 
+              value="map" 
+              data-value="map"
+              onClick={() => console.log('🗺️ Switched to Map View')}
+            >
+              Map View
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="list" className="space-y-4">
@@ -908,7 +929,10 @@ export default function SearchPage() {
                             View Details
                           </Button>
                           <Button
-                            onClick={() => handlePlaygroundClick(playground)}
+                            onClick={() => {
+                              console.log('🗺️ View on Map clicked for:', playground.name)
+                              handlePlaygroundClick(playground)
+                            }}
                             variant="outline"
                             className="border-orange-300 text-orange-600 hover:bg-orange-50 bg-transparent"
                           >
@@ -949,8 +973,29 @@ export default function SearchPage() {
                   center={mapCenter}
                   zoom={12}
                   height="500px"
-                  playgrounds={playgrounds}
-                  onPlaygroundClick={handlePlaygroundClick}
+                  playgrounds={playgrounds.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    lat: p.lat,
+                    lon: p.lon,
+                    address: p.address,
+                    city: p.city,
+                    amenities: p.amenities || [],
+                    surface: p.surface || 'unknown',
+                    access: p.access,
+                    opening_hours: p.opening_hours,
+                    source: p.source,
+                    googleRating: p.googleRating,
+                    explorerRating: p.explorerRating
+                  }))}
+                  onPlaygroundClick={(playground) => {
+                    console.log('🎯 Map marker clicked:', playground.name)
+                    // Find the enhanced playground data
+                    const enhancedPlayground = playgrounds.find(p => p.id === playground.id)
+                    if (enhancedPlayground) {
+                      setSelectedPlayground(enhancedPlayground)
+                    }
+                  }}
                 />
               </CardContent>
             </Card>
